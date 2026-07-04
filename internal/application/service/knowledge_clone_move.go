@@ -358,7 +358,7 @@ func (s *knowledgeService) CloneChunk(ctx context.Context, src, dst *types.Knowl
 			copiedURLs = append(copiedURLs, copied...)
 
 			targetChunk := &types.Chunk{
-				ID:              uuid.New().String(),
+				ID:              ComputeChunkStableID(dst.ID, "parent", sourceChunk.ChunkIndex, sourceChunk.Content),
 				TenantID:        dst.TenantID,
 				KnowledgeID:     dst.ID,
 				KnowledgeBaseID: dst.KnowledgeBaseID,
@@ -821,7 +821,7 @@ func (s *knowledgeService) cloneFAQKnowledgeBase(
 			copiedImageURLs = append(copiedImageURLs, copied...)
 
 			newChunk := &types.Chunk{
-				ID:              uuid.New().String(),
+				ID:              ComputeChunkStableID(dstKnowledge.ID, "text", srcChunk.ChunkIndex, srcChunk.Content),
 				TenantID:        dstKB.TenantID,
 				KnowledgeID:     dstKnowledge.ID,
 				KnowledgeBaseID: dstKB.ID,
