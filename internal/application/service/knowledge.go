@@ -42,28 +42,29 @@ var (
 // knowledgeService implements the knowledge service interface
 // service 实现知识服务接口
 type knowledgeService struct {
-	config          *config.Config
-	retrieveEngine  interfaces.RetrieveEngineRegistry
-	ownership       retriever.TenantStoreOwnership
-	repo            interfaces.KnowledgeRepository
-	kbService       interfaces.KnowledgeBaseService
-	tenantRepo      interfaces.TenantRepository
-	tenantService   interfaces.TenantService
-	documentReader  interfaces.DocumentReader
-	chunkService    interfaces.ChunkService
-	chunkRepo       interfaces.ChunkRepository
-	tagRepo         interfaces.KnowledgeTagRepository
-	tagService      interfaces.KnowledgeTagService
-	fileSvc         interfaces.FileService
-	storageResolver interfaces.StorageBackendResolver
-	modelService    interfaces.ModelService
-	task            interfaces.TaskEnqueuer
-	taskInspector   interfaces.TaskInspector
-	graphEngine     interfaces.RetrieveGraphRepository
-	redisClient     *redis.Client
-	kbShareService  interfaces.KBShareService
-	imageResolver   *docparser.ImageResolver
-	taskPendingRepo interfaces.TaskPendingOpsRepository
+	config           *config.Config
+	retrieveEngine   interfaces.RetrieveEngineRegistry
+	ownership        retriever.TenantStoreOwnership
+	repo             interfaces.KnowledgeRepository
+	kbService        interfaces.KnowledgeBaseService
+	tenantRepo       interfaces.TenantRepository
+	tenantService    interfaces.TenantService
+	tenantMemberRepo interfaces.TenantMemberRepository
+	documentReader   interfaces.DocumentReader
+	chunkService     interfaces.ChunkService
+	chunkRepo        interfaces.ChunkRepository
+	tagRepo          interfaces.KnowledgeTagRepository
+	tagService       interfaces.KnowledgeTagService
+	fileSvc          interfaces.FileService
+	storageResolver  interfaces.StorageBackendResolver
+	modelService     interfaces.ModelService
+	task             interfaces.TaskEnqueuer
+	taskInspector    interfaces.TaskInspector
+	graphEngine      interfaces.RetrieveGraphRepository
+	redisClient      *redis.Client
+	kbShareService   interfaces.KBShareService
+	imageResolver    *docparser.ImageResolver
+	taskPendingRepo  interfaces.TaskPendingOpsRepository
 
 	// In-memory fallbacks for Lite mode (no Redis)
 	memFAQProgress      sync.Map // taskID -> *types.FAQImportProgress
@@ -92,6 +93,7 @@ func NewKnowledgeService(
 	kbService interfaces.KnowledgeBaseService,
 	tenantRepo interfaces.TenantRepository,
 	tenantService interfaces.TenantService,
+	tenantMemberRepo interfaces.TenantMemberRepository,
 	chunkService interfaces.ChunkService,
 	chunkRepo interfaces.ChunkRepository,
 	tagRepo interfaces.KnowledgeTagRepository,
@@ -113,31 +115,32 @@ func NewKnowledgeService(
 	spanTracker SpanTracker,
 ) (interfaces.KnowledgeService, error) {
 	return &knowledgeService{
-		config:          config,
-		repo:            repo,
-		kbService:       kbService,
-		tenantRepo:      tenantRepo,
-		tenantService:   tenantService,
-		documentReader:  documentReader,
-		chunkService:    chunkService,
-		chunkRepo:       chunkRepo,
-		tagRepo:         tagRepo,
-		tagService:      tagService,
-		fileSvc:         fileSvc,
-		storageResolver: storageResolver,
-		modelService:    modelService,
-		task:            task,
-		taskInspector:   taskInspector,
-		graphEngine:     graphEngine,
-		retrieveEngine:  retrieveEngine,
-		ownership:       ownership,
-		redisClient:     redisClient,
-		kbShareService:  kbShareService,
-		imageResolver:   imageResolver,
-		wikiRepo:        wikiRepo,
-		wikiService:     wikiService,
-		taskPendingRepo: taskPendingRepo,
-		spanTracker:     spanTracker,
+		config:           config,
+		repo:             repo,
+		kbService:        kbService,
+		tenantRepo:       tenantRepo,
+		tenantService:    tenantService,
+		tenantMemberRepo: tenantMemberRepo,
+		documentReader:   documentReader,
+		chunkService:     chunkService,
+		chunkRepo:        chunkRepo,
+		tagRepo:          tagRepo,
+		tagService:       tagService,
+		fileSvc:          fileSvc,
+		storageResolver:  storageResolver,
+		modelService:     modelService,
+		task:             task,
+		taskInspector:    taskInspector,
+		graphEngine:      graphEngine,
+		retrieveEngine:   retrieveEngine,
+		ownership:        ownership,
+		redisClient:      redisClient,
+		kbShareService:   kbShareService,
+		imageResolver:    imageResolver,
+		wikiRepo:         wikiRepo,
+		wikiService:      wikiService,
+		taskPendingRepo:  taskPendingRepo,
+		spanTracker:      spanTracker,
 	}, nil
 }
 
