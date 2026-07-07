@@ -248,6 +248,38 @@ func (r *fakeTenantMemberRepo) RemoveOwnerAtomically(
 	return nil
 }
 
+// AdjustUserStorageUsed mirrors the production repo's clamp-to-0
+// semantics: storage_used never goes negative. Delta may be negative
+// (delete) or positive (index/clone).
+func (r *fakeTenantMemberRepo) AdjustUserStorageUsed(
+	ctx context.Context, userID string, tenantID uint64, delta int64,
+) error {
+	for _, e := range r.rows {
+		if e.UserID == userID && e.TenantID == tenantID && !e.DeletedAt.Valid {
+			e.StorageUsed += delta
+			if e.StorageUsed < 0 {
+				e.StorageUsed = 0
+			}
+			return nil
+		}
+	}
+	return gormErrRecordNotFound
+}
+
+// UpdateStorageQuota updates the per-user storage quota. quotaBytes=0
+// means "no individual limit".
+func (r *fakeTenantMemberRepo) UpdateStorageQuota(
+	ctx context.Context, userID string, tenantID uint64, quotaBytes int64,
+) error {
+	for _, e := range r.rows {
+		if e.UserID == userID && e.TenantID == tenantID && !e.DeletedAt.Valid {
+			e.StorageQuota = quotaBytes
+			return nil
+		}
+	}
+	return gormErrRecordNotFound
+}
+
 // Compile-time guard so the test stays in sync with the interface.
 var _ interfaces.TenantMemberRepository = (*fakeTenantMemberRepo)(nil)
 
