@@ -595,11 +595,18 @@ func (s *knowledgeService) DeleteKnowledgeList(ctx context.Context, ids []string
 			logger.GetLogger(ctx).WithField("error", err).Errorf("DeleteKnowledge update tenant storage used failed")
 		}
 		// update per-user storage usage (charge KB owner when available)
-		userDeltas := make(map[string]int64) // userID → total delta
+		// kbCreatorCache reuses the KB objects already loaded above
+		// (kbFileServices / wiki cleanup loop) so we don't re-query
+		// the DB once per knowledge row in the batch.
+		kbCreatorCache := make(map[string]string) // kbID → CreatorID
+		userDeltas := make(map[string]int64)      // userID → total delta
 		for _, knowledge := range knowledgeList {
-			chargeUID := ""
-			if kbObj, err := s.kbService.GetKnowledgeBaseByID(ctx, knowledge.KnowledgeBaseID); err == nil && kbObj != nil {
-				chargeUID = kbObj.CreatorID
+			chargeUID, cached := kbCreatorCache[knowledge.KnowledgeBaseID]
+			if !cached {
+				if kbObj, err := s.kbService.GetKnowledgeBaseByID(ctx, knowledge.KnowledgeBaseID); err == nil && kbObj != nil {
+					chargeUID = kbObj.CreatorID
+				}
+				kbCreatorCache[knowledge.KnowledgeBaseID] = chargeUID
 			}
 			if chargeUID == "" {
 				if uid, ok := types.UserIDFromContext(ctx); ok && !types.IsSyntheticUserID(uid) {
