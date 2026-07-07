@@ -24,9 +24,9 @@ type fakeMemberService struct {
 		TenantID uint64
 		Role     types.TenantRole
 	}
-	failGet     error
-	failHasAny  error
-	failAdd     error
+	failGet    error
+	failHasAny error
+	failAdd    error
 	// 阻止 auto-promote 把 hasAny 翻面：默认 AddMember 成功也会写入 members map。
 }
 
@@ -129,6 +129,17 @@ func (f *fakeMemberService) UpdateRole(
 	return nil
 }
 func (f *fakeMemberService) RemoveMember(ctx context.Context, userID string, tenantID uint64) error {
+	return nil
+}
+
+// UpdateMemberStorageQuota is a no-op stub for the test fake. The
+// resolveTenantRole path under test never touches per-user storage
+// quota, so we don't need real in-memory accounting here; the service
+// layer quota logic has its own dedicated tests in the service
+// package.
+func (f *fakeMemberService) UpdateMemberStorageQuota(
+	ctx context.Context, userID string, tenantID uint64, quotaBytes int64,
+) error {
 	return nil
 }
 
