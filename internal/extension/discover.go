@@ -40,7 +40,7 @@ func discover(input discoverRequest) ([]*Manifest, error) {
 	return manifests, errors.Join(errorgroup...)
 }
 
-func builtins(hostVersion string) []*Manifest {
+func builtins(hostVersion string) ([]*Manifest, error) {
 	transport := strings.ToLower(strings.TrimSpace(os.Getenv("DOCREADER_TRANSPORT")))
 	addr := strings.TrimSpace(os.Getenv("DOCREADER_ADDR"))
 
@@ -65,15 +65,15 @@ func builtins(hostVersion string) []*Manifest {
 			//todo fix this
 		},
 		Runtime:     Runtime{Transport: tr, Endpoint: addr},
-		Criticality: "required",
+		Criticality: CriticalityRequired,
 		FallbackFor: []string{"*"},
 		Builtin:     true,
 	}
 	var reserved map[string]struct{}
 	if err := m.Validate(hostVersion, reserved, m.Builtin); err != nil {
-		return nil
+		return nil, fmt.Errorf("builtin %s manifest is invalid: %w", m.Metadata.ID, err)
 	}
-	return []*Manifest{m}
+	return []*Manifest{m}, nil
 }
 
 func discoverInDirectory(dir, hostVersion string, reserved map[string]struct{}) ([]*Manifest, error) {
@@ -139,6 +139,15 @@ func parseManifestFile(content string, dir string, hostVersion string, reserved 
 	return &m, nil
 }
 
+func DefaultCriticality(kind Kind) string {
+	switch kind {
+	case KindDocParser:
+		return CriticalityRequired
+	default:
+		return CriticalityOptional
+	}
+}
+
 func (m *Manifest) Validate(hostVersion string, reserved map[string]struct{}, builtin bool) error {
 	where := m.Dir
 	if !idRe.MatchString(m.Metadata.ID) {
@@ -147,6 +156,7 @@ func (m *Manifest) Validate(hostVersion string, reserved map[string]struct{}, bu
 	if _, taken := reserved[m.Metadata.ID]; taken {
 		return fmt.Errorf("%s: metadata.id %q  name same with inner connectorer", where, m.Metadata.ID)
 	}
+
 	switch m.Extension.Kind {
 	case KindDatasource, KindDocParser, KindWebSearch:
 	default:
@@ -154,6 +164,15 @@ func (m *Manifest) Validate(hostVersion string, reserved map[string]struct{}, bu
 	}
 	if !hostCompatible(m.Compatibility.Host, hostVersion) {
 		return fmt.Errorf("%s: need host %q, host is %s: %w", where, m.Compatibility.Host, hostVersion, ErrIncompatible)
+	}
+
+	switch c := strings.TrimSpace(m.Criticality); c {
+	case "":
+		m.Criticality = DefaultCriticality(m.Extension.Kind)
+	case CriticalityRequired, CriticalityOptional:
+		m.Criticality = c
+	default:
+		return fmt.Errorf("%s: criticality %q is not one of {%q, %q}: %w", where, m.Criticality, CriticalityRequired, CriticalityOptional, ErrInvalidManifest)
 	}
 
 	switch m.Runtime.Transport {

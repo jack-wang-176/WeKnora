@@ -64,6 +64,7 @@ import (
 	rssConnector "github.com/Tencent/WeKnora/internal/datasource/connector/rss"
 	yuqueConnector "github.com/Tencent/WeKnora/internal/datasource/connector/yuque"
 	"github.com/Tencent/WeKnora/internal/event"
+	"github.com/Tencent/WeKnora/internal/extension"
 	"github.com/Tencent/WeKnora/internal/handler"
 	"github.com/Tencent/WeKnora/internal/handler/session"
 	imPkg "github.com/Tencent/WeKnora/internal/im"
@@ -132,6 +133,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 
 	// External service clients
 	logger.Debugf(ctx, "[Container] Registering external service clients...")
+	must(container.Provide(initExtensionHostProvider))
 	must(container.Provide(initDocReaderClient))
 	must(container.Provide(docparser.NewImageResolver))
 	must(container.Provide(initOllamaService))
@@ -140,6 +142,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	logger.Debugf(ctx, "[Container] Initializing DuckDB...")
 	must(container.Provide(NewDuckDB))
 	logger.Debugf(ctx, "[Container] DuckDB registered")
+	must(container.Invoke(registerExtensionCleanup))
 
 	// Data repositories layer
 	logger.Debugf(ctx, "[Container] Registering repositories...")
@@ -1482,9 +1485,10 @@ func registerLangfuseCleanup(mgr *langfuse.Manager, cleaner interfaces.ResourceC
 }
 
 // initDocReaderClient initializes the DocumentReader client (lightweight API).
-func initDocReaderClient(cfg *config.Config) (interfaces.DocumentReader, error) {
+func initDocReaderClient(cfg *config.Config, host extension.Host) (interfaces.DocumentReader, error) {
 	addr := strings.TrimSpace(os.Getenv("DOCREADER_ADDR"))
 	transport := strings.TrimSpace(os.Getenv("DOCREADER_TRANSPORT"))
+
 	if transport == "" {
 		transport = "grpc"
 	}
@@ -1499,8 +1503,84 @@ func initDocReaderClient(cfg *config.Config) (interfaces.DocumentReader, error) 
 		}
 		return docparser.NewHTTPDocumentReader(addr)
 	default:
-		return docparser.NewGRPCDocumentReader(addr)
+		ch, err := host.Open(context.Background(), "docreader")
+		if errors.Is(err, extension.ErrNotConfigured) {
+			return docparser.NewDisconnectedGRPCDocumentReader(), nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		// The reader borrows the channel; the host stays the owner of the
+		// connection behind it, so nothing here unwraps or caches the conn.
+		return docparser.NewGRPCDocumentReaderFromChannel(ch), nil
 	}
+}
+
+func registerExtensionCleanup(host extension.Host, cleaner interfaces.ResourceCleaner) {
+	if host == nil {
+		return
+	}
+
+	cleaner.RegisterWithName("Extension", func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return host.Close(ctx)
+	})
+}
+
+// resolveHostVersion returns the version the extension host advertises to
+// plugins, which manifests match against with compatibility.host.
+//
+// It lives here rather than in internal/extension on purpose: the build-injected
+// version is handler.Version, and an import of internal/handler from
+// internal/extension would drag the whole application into the extension
+// package's dependency graph — and would become an import cycle the moment a
+// handler needs the host.
+//
+// Three sources, in order: the ldflags-injected version; the repository VERSION
+// file (make build and go run inject nothing, so handler.Version is the literal
+// "unknown" there and every plugin declaring compatibility.host would otherwise
+// be rejected); and finally "unknown", which only ever matches manifests that
+// declare no host constraint. The relative paths are walked because the working
+// directory differs between running from the repository root and from a cmd
+// subdirectory; inside the container image none of them exist, which is correct,
+// because there ldflags did inject a real version.
+func resolveHostVersion() string {
+	if v := strings.TrimSpace(handler.Version); v != "" && v != "unknown" {
+		return v
+	}
+	for _, p := range []string{
+		"VERSION",
+		filepath.Join("..", "..", "VERSION"),
+		filepath.Join("..", "..", "..", "VERSION"),
+	} {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		if v := strings.TrimSpace(string(b)); v != "" {
+			return v
+		}
+	}
+	return "unknown"
+}
+
+func initExtensionHostProvider() extension.Host {
+	ctx := context.Background()
+	hostVersion := resolveHostVersion()
+	dirs := extension.ResolvePluginDirs()
+	reserved := make(map[string]struct{}, len(datasource.ConnectorMetadataRegistry))
+	for id := range datasource.ConnectorMetadataRegistry {
+		reserved[id] = struct{}{}
+	}
+
+	manifests, err := extension.LoadManifests(dirs, hostVersion, reserved)
+	if err != nil {
+		logger.Warnf(ctx, "[PluginExtension] some manifests were skipped: %v", err)
+	}
+	logger.Infof(ctx, "[PluginExtension] host version %s, %d manifest(s) from %v",
+		hostVersion, len(manifests), dirs)
+	return extension.NewHost(hostVersion, manifests)
 }
 
 // initOllamaService initializes the Ollama service client
