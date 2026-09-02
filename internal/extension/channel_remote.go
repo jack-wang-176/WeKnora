@@ -10,7 +10,7 @@ import (
 
 type remoteChannel struct {
 	endpoint  string
-	mu        sync.Mutex
+	mu        sync.RWMutex
 	healthSvc string
 	conn      *grpc.ClientConn
 }
@@ -28,12 +28,12 @@ func newRemoteChannel(endpoint string) (*remoteChannel, error) {
 }
 
 func (c *remoteChannel) Conn() any {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.conn
 }
 func (c *remoteChannel) Healthy(ctx context.Context) error {
-	conn, ok := c.Conn().(grpc.ClientConnInterface)
+	conn, ok := c.Conn().(*grpc.ClientConn)
 	if !ok || conn == nil {
 		return ErrNotConnected
 	}
@@ -76,9 +76,12 @@ func (c *remoteChannel) connect(ctx context.Context) error {
 	return nil
 }
 
-func (c *remoteChannel) setEndpoint(addr string) {
-	if strings.TrimSpace(addr) == "" {
+func (c *remoteChannel) SetEndpoint(addr string) {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
 		return
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.endpoint = addr
 }

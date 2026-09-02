@@ -20,6 +20,11 @@ const (
 	TransportRemoteHTTP     Transport = "remote-http"
 )
 
+const (
+	CriticalityRequired = "required"
+	CriticalityOptional = "optional"
+)
+
 type Manifest struct {
 	Metadata      Metadata      `yaml:"metadata"`
 	Extension     ExtensionSpec `yaml:"extension"`

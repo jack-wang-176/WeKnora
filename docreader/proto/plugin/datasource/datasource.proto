@@ -1,0 +1,109 @@
+syntax = "proto3";
+
+package weknora.plugin.datasource.v1;
+
+option go_package = "github.com/Tencent/WeKnora/proto/plugin/datasource/v1;datasourcev1";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+service DataSource {
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+  rpc Validate(ValidateRequest) returns (ValidateResponse);
+  rpc ListResources(ListResourcesRequest) returns (ListResourcesResponse);
+  rpc ResolveResourceAncestors(ResolveAncestorsRequest) returns (ResolveAncestorsResponse);
+  rpc FetchStream(FetchStreamRequest) returns (stream FetchStreamResponse);
+}
+
+// public struct
+
+message Config {
+  string type = 1;
+  google.protobuf.Struct credentials = 2;
+  repeated string resource_ids = 3;
+  google.protobuf.Struct settings = 4;
+  bool multimodal_enabled = 5;
+}
+
+message Resource {
+  string external_id = 1;
+  string name = 2;
+  string type = 3;
+  string description = 4;
+  string url = 5;
+  google.protobuf.Timestamp modified_at = 6;
+  string parent_id = 7;
+  bool has_children = 8;
+  map<string, string> metadata = 9;
+}
+
+message Cursor {
+  google.protobuf.Timestamp last_sync_time = 1;
+  google.protobuf.Struct connector_cursor = 2;
+  string last_schema_hash = 3;
+}
+
+message FetchedItem {
+  string external_id = 1;
+  string title = 2;
+  bytes content = 3;          
+  string content_type = 4;
+  string file_name = 5;
+  string url = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  map<string, string> metadata = 8;
+  bool is_deleted = 9;
+  string source_resource_id = 10;
+  bool replaces_subtree = 11;
+  repeated string subtree_keep = 12;
+}
+
+// reqest/response
+
+message DescribeRequest {}
+
+message DescribeResponse {
+  string id = 1;
+  string version = 2;
+  repeated string capabilities = 3;
+  repeated string contracts = 4;
+}
+
+message ValidateRequest { Config config = 1; }
+
+message ValidateResponse {
+  bool ok = 1;
+  string message = 2;
+}
+
+message ListResourcesRequest {
+  Config config = 1;
+  string parent_id = 2;   
+}
+
+message ListResourcesResponse { 
+    repeated Resource resources = 1; 
+}
+
+message ResolveAncestorsRequest {
+  Config config = 1;
+  repeated string resource_ids = 2;
+}
+
+message ResolveAncestorsResponse { 
+    repeated string ancestor_ids = 1; 
+}
+
+message FetchStreamRequest {
+  Config config = 1;
+  repeated string resource_ids = 2;  
+  Cursor cursor = 3;                
+}
+
+message FetchStreamResponse {
+  oneof payload {
+    FetchedItem item = 1;     
+    Cursor checkpoint = 2;      
+    Cursor final_cursor = 3;    
+  }
+}
