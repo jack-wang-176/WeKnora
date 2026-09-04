@@ -21,6 +21,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/config"
 	"github.com/Tencent/WeKnora/internal/database"
 	apperrors "github.com/Tencent/WeKnora/internal/errors"
+	"github.com/Tencent/WeKnora/internal/extension"
 	"github.com/Tencent/WeKnora/internal/infrastructure/docparser"
 	"github.com/Tencent/WeKnora/internal/logger"
 	modellimiter "github.com/Tencent/WeKnora/internal/models/limiter"
@@ -40,6 +41,7 @@ type runtimeKnowledgeCanceller interface {
 type SystemHandler struct {
 	cfg              *config.Config
 	neo4jDriver      neo4j.Driver
+	host             extension.Host
 	documentReader   interfaces.DocumentReader
 	tenantSvc        interfaces.TenantService
 	userSvc          interfaces.UserService
@@ -71,6 +73,7 @@ type SystemHandler struct {
 // NewSystemHandler creates a new system handler
 func NewSystemHandler(cfg *config.Config,
 	neo4jDriver neo4j.Driver,
+	host extension.Host,
 	documentReader interfaces.DocumentReader,
 	tenantSvc interfaces.TenantService,
 	userSvc interfaces.UserService,
@@ -85,6 +88,7 @@ func NewSystemHandler(cfg *config.Config,
 	return &SystemHandler{
 		cfg:                cfg,
 		neo4jDriver:        neo4jDriver,
+		host:               host,
 		documentReader:     documentReader,
 		tenantSvc:          tenantSvc,
 		userSvc:            userSvc,
@@ -413,11 +417,22 @@ func (h *SystemHandler) ListParserEngines(c *gin.Context) {
 		}
 	}
 
-	reader, docreaderAddr, docreaderTransport := h.resolveDocReader(c.Request.Context(), overrides)
-	connected := reader != nil && reader.IsConnected()
+	ctx := c.Request.Context()
+	reader, docreaderAddr, docreaderTransport, hostOwned := h.resolveDocReader(c.Request.Context(), overrides)
+	connected := h.docreaderConnected(ctx, reader, hostOwned)
 	remoteEngines := h.fetchRemoteEngines(c.Request.Context(), reader, overrides)
 	engines := docparser.ListAllEngines(connected, overrides, remoteEngines)
 	c.JSON(200, gin.H{"code": 0, "msg": "success", "data": engines, "docreader_addr": docreaderAddr, "docreader_transport": docreaderTransport, "connected": connected})
+}
+
+func (h *SystemHandler) docreaderConnected(ctx context.Context, reader interfaces.DocumentReader, hostOwned bool) bool {
+	if reader == nil {
+		return false
+	}
+	if !hostOwned || h.host == nil {
+		return reader.IsConnected()
+	}
+	return h.host.Health(ctx, extension.DocreaderExtesnionID).State == extension.StateServing
 }
 
 // ReconnectDocReader reconnects the document converter to a new (or same) DocReader address.
@@ -474,11 +489,13 @@ func (h *SystemHandler) ReconnectDocReader(c *gin.Context) {
 			}
 		}
 	}
-	remoteEngines := h.fetchRemoteEngines(c.Request.Context(), h.documentReader, overrides)
-	engines := docparser.ListAllEngines(true, overrides, remoteEngines)
+	ctx := c.Request.Context()
+	remoteEngines := h.fetchRemoteEngines(ctx, h.documentReader, overrides)
+	connected := h.docreaderConnected(ctx, h.documentReader, true)
+	engines := docparser.ListAllEngines(connected, overrides, remoteEngines)
 
 	_, docreaderTransport := h.getDocReaderConnInfo()
-	c.JSON(200, gin.H{"code": 0, "msg": "连接成功", "data": engines, "docreader_addr": addr, "docreader_transport": docreaderTransport, "connected": true})
+	c.JSON(200, gin.H{"code": 0, "msg": "连接成功", "data": engines, "docreader_addr": addr, "docreader_transport": docreaderTransport, "connected": connected})
 }
 
 // CheckParserEngines runs availability check with the given config overrides (e.g. current form values).
@@ -514,23 +531,25 @@ func (h *SystemHandler) CheckParserEngines(c *gin.Context) {
 			overrides["weknoracloud_app_id"] = creds.AppID
 		}
 	}
-	reader, docreaderAddr, docreaderTransport := h.resolveDocReader(c.Request.Context(), overrides)
-	connected := reader != nil && reader.IsConnected()
+
+	ctx := c.Request.Context()
+	reader, docreaderAddr, docreaderTransport, hostOwned := h.resolveDocReader(c.Request.Context(), overrides)
+	connected := h.docreaderConnected(ctx, reader, hostOwned)
 	remoteEngines := h.fetchRemoteEngines(c.Request.Context(), reader, overrides)
 	engines := docparser.ListAllEngines(connected, overrides, remoteEngines)
 	c.JSON(200, gin.H{"code": 0, "msg": "success", "data": engines, "docreader_addr": docreaderAddr, "docreader_transport": docreaderTransport, "connected": connected})
 }
 
-func (h *SystemHandler) resolveDocReader(ctx context.Context, overrides map[string]string) (interfaces.DocumentReader, string, string) {
+func (h *SystemHandler) resolveDocReader(ctx context.Context, overrides map[string]string) (interfaces.DocumentReader, string, string, bool) {
 	if len(overrides) > 0 {
 		if addr := strings.TrimSpace(overrides["docreader_addr"]); addr != "" && service.IsWeKnoraCloudDocReaderAddr(addr) {
 			reader := h.ResolveDocumentReader(ctx, addr)
-			return reader, addr, transportFromDocReaderAddr(addr)
+			return reader, addr, transportFromDocReaderAddr(addr), h.docreaderConnected(ctx, reader, true)
 		}
 	}
 
 	addr, transport := h.getDocReaderConnInfo()
-	return h.documentReader, addr, transport
+	return h.documentReader, addr, transport, true
 }
 
 func transportFromDocReaderAddr(addr string) string {
@@ -1256,7 +1275,6 @@ func (h *SystemHandler) ResolveDocumentReader(ctx context.Context, addr string) 
 	if addr == "" {
 		return h.documentReader
 	}
-
 	if service.IsWeKnoraCloudDocReaderAddr(addr) {
 		creds := h.tenantSvc.GetWeKnoraCloudCredentials(ctx)
 		if creds == nil {
@@ -1268,12 +1286,11 @@ func (h *SystemHandler) ResolveDocumentReader(ctx context.Context, addr string) 
 		}
 		return reader
 	}
-
-	reader, err := docparser.NewHTTPDocumentReader(addr)
-	if err != nil || reader == nil {
-		return reader
-	}
-	return reader
+	// Any other address is a process-level endpoint, which the extension host
+	// owns. Handing back the host-owned reader keeps "one connection per
+	// endpoint" true; building a second client here would give the host a
+	// connection it neither health-checks nor closes.
+	return h.documentReader
 }
 
 // PromoteUserToSystemAdminRequest defines the request for promoting a user to system admin.

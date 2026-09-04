@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"go.uber.org/dig"
 
 	"github.com/Tencent/WeKnora/internal/config"
+	"github.com/Tencent/WeKnora/internal/extension"
 	"github.com/Tencent/WeKnora/internal/handler"
 	"github.com/Tencent/WeKnora/internal/handler/session"
 	"github.com/Tencent/WeKnora/internal/logger"
@@ -86,6 +88,7 @@ type RouterParams struct {
 	WeKnoraCloudHandler          *handler.WeKnoraCloudHandler
 	WikiPageHandler              *handler.WikiPageHandler
 	MemoryHandler                *handler.MemoryHandler
+	ExtHost                      extension.Host
 }
 
 // NewRouter 创建新的路由
@@ -128,6 +131,20 @@ func NewRouter(params RouterParams) *gin.Engine {
 	// 健康检查（不需要认证）
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
+	})
+	r.GET("/readyz", func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+		defer cancel()
+		rd := params.ExtHost.Ready(ctx)
+		code := http.StatusOK
+		if !rd.Ready {
+			code = http.StatusServiceUnavailable
+		}
+		c.JSON(code, gin.H{
+			"ready":    rd.Ready,
+			"failed":   rd.Failed,
+			"degraded": rd.Degraded,
+		})
 	})
 
 	// Swagger API 文档（仅在非生产环境下启用）

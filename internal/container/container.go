@@ -1486,34 +1486,31 @@ func registerLangfuseCleanup(mgr *langfuse.Manager, cleaner interfaces.ResourceC
 
 // initDocReaderClient initializes the DocumentReader client (lightweight API).
 func initDocReaderClient(cfg *config.Config, host extension.Host) (interfaces.DocumentReader, error) {
-	addr := strings.TrimSpace(os.Getenv("DOCREADER_ADDR"))
-	transport := strings.TrimSpace(os.Getenv("DOCREADER_TRANSPORT"))
+	m, ok := host.Get(extension.DocreaderExtesnionID)
+	if !ok {
+		return docparser.NewDisconnectedGRPCDocumentReader(), nil
+	}
+	ch, err := host.Open(context.Background(), extension.DocreaderExtesnionID)
 
-	if transport == "" {
-		transport = "grpc"
+	ctx := context.Background()
+	switch {
+	case errors.Is(err, extension.ErrNotConfigured):
+		logger.Infof(ctx, "[DocConverter] docreader endpoint not configured, starting disconnected")
+		return disconnectedReaderFor(m), nil
+	case err != nil && m.IsRequired():
+		logger.Errorf(ctx, "[DocConverter] required extension %s failed to open: %v", m.Metadata.ID, err)
+		return disconnectedReaderFor(m), nil
+	case err != nil:
+		logger.Warnf(ctx, "[DocConverter] optional extension %s failed to open: %v", m.Metadata.ID, err)
+		return disconnectedReaderFor(m), nil
 	}
-	if addr == "" {
-		logger.Infof(context.Background(), "[DocConverter] No DOCREADER_ADDR configured, starting disconnected")
+	return docparser.NewGRPCDocumentReaderFromChannel(ch), nil
+}
+func disconnectedReaderFor(m *extension.Manifest) interfaces.DocumentReader {
+	if m.Runtime.Transport == extension.TransportRemoteHTTP {
+		return docparser.NewDisconnectedHTTPDocumentReader()
 	}
-	transport = strings.ToLower(transport)
-	switch transport {
-	case "http", "https":
-		if addr != "" && !strings.HasPrefix(addr, "http://") && !strings.HasPrefix(addr, "https://") {
-			addr = "http://" + addr
-		}
-		return docparser.NewHTTPDocumentReader(addr)
-	default:
-		ch, err := host.Open(context.Background(), "docreader")
-		if errors.Is(err, extension.ErrNotConfigured) {
-			return docparser.NewDisconnectedGRPCDocumentReader(), nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		// The reader borrows the channel; the host stays the owner of the
-		// connection behind it, so nothing here unwraps or caches the conn.
-		return docparser.NewGRPCDocumentReaderFromChannel(ch), nil
-	}
+	return docparser.NewDisconnectedGRPCDocumentReader()
 }
 
 func registerExtensionCleanup(host extension.Host, cleaner interfaces.ResourceCleaner) {
