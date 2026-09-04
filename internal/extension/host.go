@@ -3,7 +3,7 @@ package extension
 import (
 	"context"
 	"errors"
-	"fmt"
+	"sort"
 	"sync"
 )
 
@@ -12,6 +12,8 @@ type Host interface {
 	Get(id string) (*Manifest, bool)
 	Open(ctx context.Context, id string) (Channel, error)
 	Health(ctx context.Context, id string) Status
+	HealthAll(ctx context.Context, kind Kind) map[string]Status
+	Ready(ctx context.Context) Readiness
 	Close(ctx context.Context) error
 }
 
@@ -35,6 +37,13 @@ type host struct {
 	mu          sync.RWMutex
 	manifests   map[string]*Manifest
 	remote      map[string]Channel
+}
+
+type Readiness struct {
+	Ready    bool
+	Degraded []string
+	Failed   []string
+	Statuses map[string]Status
 }
 
 var _ Host = (*host)(nil)
@@ -70,14 +79,14 @@ func (h *host) List(kind Kind) []*Manifest {
 	return out
 }
 
-func (h *host) openRemote(m *Manifest) (Channel, error) {
+func (h *host) openCached(m *Manifest, build func() (Channel, error)) (Channel, error) {
 	h.mu.RLock()
 	ch, ok := h.remote[m.Metadata.ID]
 	h.mu.RUnlock()
 	if ok {
 		return ch, nil
 	}
-	ch, err := newRemoteChannel(m.Runtime.Endpoint)
+	ch, err := build()
 	if err != nil {
 		return nil, err
 	}
@@ -96,15 +105,20 @@ func (h *host) Open(ctx context.Context, id string) (Channel, error) {
 	if !ok {
 		return nil, ErrNotFound
 	}
+	plan := healthPlanFrom(m)
 	switch m.Runtime.Transport {
 	case TransportRemoteGRPC:
-		return h.openRemote(m)
+		return h.openCached(m, func() (Channel, error) {
+			return newRemoteChannel(m.Runtime.Endpoint, plan)
+		})
 	case TransportRemoteHTTP:
-		return nil, fmt.Errorf("extension %s: remote-http is not carried by the gRPC channel in v1", id)
+		return h.openCached(m, func() (Channel, error) {
+			return newHttpChannel(m.Runtime.Endpoint, plan)
+		})
 	case TransportSubprocessGRPC:
-		return nil, fmt.Errorf("extension %s subprocess-grpc not implemented in v1", id)
+		return nil, ErrNotServed
 	default:
-		return nil, fmt.Errorf("extension %s: transport not supported %q", id, m.Runtime.Transport)
+		return nil, ErrNotServed
 	}
 }
 
@@ -114,6 +128,32 @@ func (h *host) Health(ctx context.Context, id string) Status {
 		return statusFromErr(err)
 	}
 	return statusFromErr(ch.Healthy(ctx))
+}
+
+func (h *host) HealthAll(ctx context.Context, kind Kind) map[string]Status {
+	h.mu.RLock()
+	ids := make([]string, 0, len(h.manifests))
+	for id, m := range h.manifests {
+		if kind == "" || m.Extension.Kind == kind {
+			ids = append(ids, id)
+		}
+	}
+	h.mu.RUnlock()
+	out := make(map[string]Status, len(ids))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, id := range ids {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			st := h.Health(ctx, id)
+			mu.Lock()
+			out[id] = st
+			mu.Unlock()
+		}(id)
+	}
+	wg.Wait()
+	return out
 }
 
 func (h *host) Close(ctx context.Context) error {
@@ -127,4 +167,30 @@ func (h *host) Close(ctx context.Context) error {
 		delete(h.remote, id)
 	}
 	return errors.Join(errs...)
+}
+
+func (h *host) Ready(ctx context.Context) Readiness {
+	statuses := h.HealthAll(ctx, "")
+	r := Readiness{
+		Ready:    true,
+		Statuses: statuses,
+	}
+	for id, st := range statuses {
+		if st.State == StateNotConfigured || st.State == StateServing {
+			continue
+		}
+		m, ok := h.Get(id)
+		if !ok {
+			continue
+		}
+		if m.IsRequired() {
+			r.Failed = append(r.Failed, id)
+			r.Ready = false
+		} else {
+			r.Degraded = append(r.Degraded, id)
+		}
+	}
+	sort.Strings(r.Failed)
+	sort.Strings(r.Degraded)
+	return r
 }

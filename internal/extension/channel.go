@@ -10,8 +10,9 @@ import (
 
 // Channel is the transport-neutral carrier between the extension host and a
 // running extension process. Conn() returns an opaque carrier (today a
-// *grpc.ClientConn) so this interface never names a concrete transport type —
-// a future WASM channel can satisfy it unchanged.
+// *grpc.ClientConn) so this interface never names a concrete transport type
+// such opaque carrier could carried more info like baseurl for httpClient
+// to keep a clear functional level
 type Channel interface {
 	Conn() any
 	Healthy(ctx context.Context) error

@@ -9,17 +9,18 @@ import (
 )
 
 type remoteChannel struct {
-	endpoint  string
-	mu        sync.RWMutex
-	healthSvc string
-	conn      *grpc.ClientConn
+	endpoint string
+	mu       sync.RWMutex
+	health   healthPlan
+	conn     *grpc.ClientConn
 }
 
 var _ Channel = (*remoteChannel)(nil)
 
-func newRemoteChannel(endpoint string) (*remoteChannel, error) {
+func newRemoteChannel(endpoint string, health healthPlan) (*remoteChannel, error) {
 	c := &remoteChannel{
 		endpoint: endpoint,
+		health:   health,
 	}
 	if err := c.connect(context.Background()); err != nil {
 		return nil, err
@@ -37,7 +38,7 @@ func (c *remoteChannel) Healthy(ctx context.Context) error {
 	if !ok || conn == nil {
 		return ErrNotConnected
 	}
-	return checkHealth(ctx, conn, c.healthSvc)
+	return checkHealthForGrpc(ctx, conn, c.health.service)
 }
 func (c *remoteChannel) Reconnect(ctx context.Context) error {
 	_ = c.Close()

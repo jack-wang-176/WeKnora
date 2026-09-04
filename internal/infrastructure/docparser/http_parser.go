@@ -8,13 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
-	"sync"
-	"time"
 
-	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
-	secutils "github.com/Tencent/WeKnora/internal/utils"
+	"github.com/Tencent/WeKnora/internal/types/interfaces"
 )
 
 const (
@@ -22,7 +18,19 @@ const (
 	PathListEngines = "/list-engines"
 )
 
-// --- JSON DTOs ---
+type ExtensionHttpChannel interface {
+	Conn() any
+	Reconnect(ctx context.Context) error
+}
+
+type httpCarrier interface {
+	Do(req *http.Request) (*http.Response, error)
+	BaseURL() string
+}
+
+type endpointHttpSetter interface {
+	SetEndpoint(addr string)
+}
 
 type httpReadConfig struct {
 	ParserEngine          string            `json:"parser_engine,omitempty"`
@@ -57,57 +65,56 @@ type httpReadResponse struct {
 
 // HTTPDocumentReader implements DocumentReader over HTTP/JSON.
 type HTTPDocumentReader struct {
-	mu      sync.RWMutex
-	baseURL string
-	client  *http.Client
+	ch ExtensionHttpChannel
 }
 
-func NewHTTPDocumentReader(baseURL string) (*HTTPDocumentReader, error) {
-	baseURL = strings.TrimSuffix(strings.TrimSpace(baseURL), "/")
-	if baseURL != "" {
-		if err := secutils.ValidateURLForSSRF(baseURL); err != nil {
-			return nil, fmt.Errorf("docreader address failed SSRF validation: %w", err)
-		}
-	}
-	clientCfg := secutils.DefaultSSRFSafeHTTPClientConfig()
-	clientCfg.Timeout = 5 * time.Minute
-	p := &HTTPDocumentReader{
-		baseURL: baseURL,
-		client:  secutils.NewSSRFSafeHTTPClient(clientCfg),
-	}
-	if p.baseURL != "" {
-		logger.Infof(context.Background(), "INFO: HTTP docreader base URL: %s", p.baseURL)
-	}
-	return p, nil
+var _ interfaces.DocumentReader = (*HTTPDocumentReader)(nil)
+
+func NewDisconnectedHTTPDocumentReader() *HTTPDocumentReader {
+	return &HTTPDocumentReader{}
 }
 
-func (p *HTTPDocumentReader) base() string {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.baseURL
+func NewHTTPDocumentReader(ch ExtensionChannel) *HTTPDocumentReader {
+	return &HTTPDocumentReader{
+		ch: ch,
+	}
+}
+
+func (p *HTTPDocumentReader) carrier() httpCarrier {
+	if p.ch == nil {
+		return nil
+	}
+	c, ok := p.ch.Conn().(httpCarrier)
+	if !ok || c == nil {
+		return nil
+	}
+	return c
 }
 
 func (p *HTTPDocumentReader) Reconnect(addr string) error {
-	addr = strings.TrimSuffix(strings.TrimSpace(addr), "/")
-	if addr != "" {
-		if err := secutils.ValidateURLForSSRF(addr); err != nil {
-			return fmt.Errorf("docreader address failed SSRF validation: %w", err)
-		}
+	if p.ch == nil {
+		return fmt.Errorf(
+			"%w: no extension channel to reconnect; configure the docreader endpoint on the extension host",
+			errNotConnected,
+		)
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.baseURL = addr
-	logger.Infof(context.Background(), "INFO: HTTP docreader base URL set to %s", p.baseURL)
-	return nil
+	if addr != "" {
+		setter, ok := p.ch.(endpointHttpSetter)
+		if !ok {
+			return fmt.Errorf(
+				"cannot point docreader at %q: this extension channel does not accept an endpoint change; "+
+					"the address has to be changed on the extension host that owns the connection",
+				addr,
+			)
+		}
+		setter.SetEndpoint(addr)
+	}
+	return p.ch.Reconnect(context.Background())
 }
 
 func (p *HTTPDocumentReader) IsConnected() bool {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.baseURL != ""
+	return p.carrier() != nil
 }
-
-func (p *HTTPDocumentReader) Close() error { return nil }
 
 type httpListEnginesRequest struct {
 	ConfigOverrides map[string]string `json:"config_overrides,omitempty"`
@@ -126,12 +133,9 @@ type httpListEnginesResponse struct {
 }
 
 func (p *HTTPDocumentReader) ListEngines(ctx context.Context, overrides map[string]string) ([]types.ParserEngineInfo, error) {
-	base := p.base()
-	if base == "" {
+	c := p.carrier()
+	if c == nil {
 		return nil, errNotConnected
-	}
-	if err := secutils.ValidateURLForSSRF(base); err != nil {
-		return nil, fmt.Errorf("docreader address failed SSRF validation: %w", err)
 	}
 
 	body := httpListEnginesRequest{ConfigOverrides: overrides}
@@ -140,13 +144,13 @@ func (p *HTTPDocumentReader) ListEngines(ctx context.Context, overrides map[stri
 		return nil, fmt.Errorf("http marshal list-engines request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+PathListEngines, bytes.NewReader(jsonBody))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL()+PathListEngines, bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("http new request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := p.client.Do(httpReq)
+	resp, err := c.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("http list-engines failed: %w", err)
 	}
@@ -194,12 +198,9 @@ func fromHTTPReadResponse(resp *httpReadResponse) *types.ReadResult {
 }
 
 func (p *HTTPDocumentReader) Read(ctx context.Context, req *types.ReadRequest) (*types.ReadResult, error) {
-	base := p.base()
-	if base == "" {
+	c := p.carrier()
+	if c == nil {
 		return nil, errNotConnected
-	}
-	if err := secutils.ValidateURLForSSRF(base); err != nil {
-		return nil, fmt.Errorf("docreader address failed SSRF validation: %w", err)
 	}
 
 	body := httpReadRequest{
@@ -221,14 +222,14 @@ func (p *HTTPDocumentReader) Read(ctx context.Context, req *types.ReadRequest) (
 	if err != nil {
 		return nil, fmt.Errorf("http marshal read request: %w", err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+PathRead, bytes.NewReader(jsonBody))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL()+PathRead, bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("http new request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.ContentLength = int64(len(jsonBody))
 
-	resp, err := p.client.Do(httpReq)
+	resp, err := c.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("http read failed: %w", err)
 	}

@@ -25,6 +25,8 @@ const (
 	CriticalityOptional = "optional"
 )
 
+const DocreaderExtesnionID = "docreader"
+
 type Manifest struct {
 	Metadata      Metadata      `yaml:"metadata"`
 	Extension     ExtensionSpec `yaml:"extension"`
@@ -99,4 +101,8 @@ type Permissions struct {
 		Write []string `yaml:"write"`
 	} `yaml:"filesystem"`
 	Secrets []string `yaml:"secrets"`
+}
+
+func (m *Manifest) IsRequired() bool {
+	return m.Criticality != CriticalityOptional
 }
