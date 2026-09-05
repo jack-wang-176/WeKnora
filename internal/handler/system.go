@@ -383,14 +383,16 @@ func (h *SystemHandler) GetSystemInfo(c *gin.Context) {
 	})
 }
 
-func (h *SystemHandler) getDocReaderConnInfo() (addr, transport string) {
-	addr = strings.TrimSpace(os.Getenv("DOCREADER_ADDR"))
-	transport = strings.TrimSpace(os.Getenv("DOCREADER_TRANSPORT"))
-	if transport == "" {
-		transport = "grpc"
+func (h *SystemHandler) getDocReaderConnInfo(ctx context.Context) (addr, transport string) {
+	if h.host == nil {
+		return "", string(extension.TransportRemoteGRPC)
 	}
-	transport = strings.ToLower(transport)
-	return addr, transport
+	st := h.host.Health(ctx, string(extension.TransportRemoteGRPC))
+	tr := string(st.Transport)
+	if tr == "" {
+		tr = string(extension.TransportRemoteGRPC)
+	}
+	return st.Endpoint, tr
 }
 
 // ListParserEngines returns available document parser engines.
@@ -494,8 +496,8 @@ func (h *SystemHandler) ReconnectDocReader(c *gin.Context) {
 	connected := h.docreaderConnected(ctx, h.documentReader, true)
 	engines := docparser.ListAllEngines(connected, overrides, remoteEngines)
 
-	_, docreaderTransport := h.getDocReaderConnInfo()
-	c.JSON(200, gin.H{"code": 0, "msg": "连接成功", "data": engines, "docreader_addr": addr, "docreader_transport": docreaderTransport, "connected": connected})
+	addr, transport := h.getDocReaderConnInfo(ctx)
+	c.JSON(200, gin.H{"code": 0, "msg": "连接成功", "data": engines, "docreader_addr": addr, "docreader_transport": transport, "connected": connected})
 }
 
 // CheckParserEngines runs availability check with the given config overrides (e.g. current form values).
@@ -544,19 +546,12 @@ func (h *SystemHandler) resolveDocReader(ctx context.Context, overrides map[stri
 	if len(overrides) > 0 {
 		if addr := strings.TrimSpace(overrides["docreader_addr"]); addr != "" && service.IsWeKnoraCloudDocReaderAddr(addr) {
 			reader := h.ResolveDocumentReader(ctx, addr)
-			return reader, addr, transportFromDocReaderAddr(addr), h.docreaderConnected(ctx, reader, true)
+			return reader, addr, "https://" + addr, h.docreaderConnected(ctx, reader, true)
 		}
 	}
 
-	addr, transport := h.getDocReaderConnInfo()
+	addr, transport := h.getDocReaderConnInfo(ctx)
 	return h.documentReader, addr, transport, true
-}
-
-func transportFromDocReaderAddr(addr string) string {
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(addr)), "https://") {
-		return "https"
-	}
-	return "http"
 }
 
 // fetchRemoteEngines queries the remote docreader for its engine list.

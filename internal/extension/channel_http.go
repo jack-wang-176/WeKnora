@@ -136,3 +136,9 @@ func (h *httpChannel) SetEndpoint(addr string) {
 	defer h.mu.Unlock()
 	h.endpoint = addr
 }
+
+func (h *httpChannel) Endpoint() string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.endpoint
+}

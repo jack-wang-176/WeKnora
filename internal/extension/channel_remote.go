@@ -86,3 +86,9 @@ func (c *remoteChannel) SetEndpoint(addr string) {
 	defer c.mu.Unlock()
 	c.endpoint = addr
 }
+
+func (c *remoteChannel) Endpoint() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.endpoint
+}

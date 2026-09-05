@@ -15,6 +15,7 @@ import (
 // to keep a clear functional level
 type Channel interface {
 	Conn() any
+	Endpoint() string
 	Healthy(ctx context.Context) error
 	Reconnect(ctx context.Context) error
 	Close() error

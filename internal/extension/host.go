@@ -18,9 +18,11 @@ type Host interface {
 }
 
 type Status struct {
-	State   State
-	Message string
-	Checked bool
+	State     State
+	Message   string
+	Checked   bool
+	Endpoint  string
+	Transport Transport
 }
 
 type State string
@@ -123,11 +125,21 @@ func (h *host) Open(ctx context.Context, id string) (Channel, error) {
 }
 
 func (h *host) Health(ctx context.Context, id string) Status {
+	m, ok := h.Get(id)
+	if !ok {
+		return statusFromErr(ErrNotFound)
+	}
 	ch, err := h.Open(ctx, id)
 	if err != nil {
-		return statusFromErr(err)
+		st := statusFromErr(err)
+		st.Endpoint = m.Runtime.Endpoint
+		st.Transport = m.Runtime.Transport
+		return st
 	}
-	return statusFromErr(ch.Healthy(ctx))
+	st := statusFromErr(ch.Healthy(ctx))
+	st.Endpoint = ch.Endpoint()
+	st.Transport = m.Runtime.Transport
+	return st
 }
 
 func (h *host) HealthAll(ctx context.Context, kind Kind) map[string]Status {
