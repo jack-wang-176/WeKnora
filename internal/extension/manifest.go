@@ -1,6 +1,8 @@
 package extension
 
 import (
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -27,6 +29,12 @@ const (
 
 const DocreaderExtesnionID = "docreader"
 
+const (
+	NetworkAny    = "any"
+	NetworkNone   = "none"
+	NetworkScoped = "scoped"
+)
+
 type Manifest struct {
 	Metadata      Metadata      `yaml:"metadata"`
 	Extension     ExtensionSpec `yaml:"extension"`
@@ -41,6 +49,17 @@ type Manifest struct {
 	FallbackFor   []string      `yaml:"fallbackFor"`
 	Scaling       string        `yaml:"scaling"`
 	IdleTimeout   string        `yaml:"idleTimeout"`
+	Hash          string        `yaml:"-"`
+	// Disabled marks an extension the operator turned off on purpose. It is
+	// not a health signal: Health short-circuits before dialling and Ready
+	// buckets it separately, so a deliberately disabled plugin never shows up
+	// as a permanent yellow light (see Readiness.Disabled).
+	Disabled bool `yaml:"-"`
+	// Downgraded records every decision this host made against what the
+	// manifest asked for. The host may override a declaration, but it must say
+	// which one it overrode: a silent rewrite leaves the author and the UI
+	// looking at different facts.
+	Downgraded []string `yaml:"-"`
 }
 
 type Metadata struct {
@@ -105,4 +124,34 @@ type Permissions struct {
 
 func (m *Manifest) IsRequired() bool {
 	return m.Criticality != CriticalityOptional
+}
+
+func (p *Permissions) validate(where string, t Transport) error {
+	switch outbound := strings.TrimSpace(p.Network.Outbound); outbound {
+	case "", NetworkAny:
+		if len(p.Network.Allow) > 0 {
+			return fmt.Errorf("%s: network.allow requires outbound=%q: %w", where, NetworkScoped, ErrInvalidManifest)
+		}
+	case NetworkNone:
+		if len(p.Network.Allow) > 0 {
+			return fmt.Errorf("%s: outbound=none contradicts %d allow entries: %w", where, len(p.Network.Allow), ErrInvalidManifest)
+		}
+	case NetworkScoped:
+		if len(p.Network.Allow) == 0 {
+			return fmt.Errorf("%s: outbound=scoped needs a non-empty network.allow: %w", where, ErrInvalidManifest)
+		}
+		return fmt.Errorf("%s: outbound=scoped is not enforceable yet: %w", where, ErrUnenforceable)
+	default:
+		return fmt.Errorf("%s: network.outbound %q unknown: %w", where, outbound, ErrInvalidManifest)
+	}
+
+	if t == TransportRemoteGRPC || t == TransportRemoteHTTP {
+		if len(p.Filesystem.Read) > 0 || len(p.Filesystem.Write) > 0 {
+			return fmt.Errorf("%s: filesystem permissions cannot apply to %s: %w", where, t, ErrUnenforceable)
+		}
+		if p.Network.Outbound == NetworkNone {
+			return fmt.Errorf("%s: outbound=none cannot apply to %s: %w", where, t, ErrUnenforceable)
+		}
+	}
+	return nil
 }

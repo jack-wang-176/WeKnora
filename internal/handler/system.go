@@ -387,7 +387,7 @@ func (h *SystemHandler) getDocReaderConnInfo(ctx context.Context) (addr, transpo
 	if h.host == nil {
 		return "", string(extension.TransportRemoteGRPC)
 	}
-	st := h.host.Health(ctx, string(extension.TransportRemoteGRPC))
+	st := h.host.Health(ctx, string(extension.DocreaderExtesnionID))
 	tr := string(st.Transport)
 	if tr == "" {
 		tr = string(extension.TransportRemoteGRPC)
@@ -420,11 +420,11 @@ func (h *SystemHandler) ListParserEngines(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	reader, docreaderAddr, docreaderTransport, hostOwned := h.resolveDocReader(c.Request.Context(), overrides)
-	connected := h.docreaderConnected(ctx, reader, hostOwned)
-	remoteEngines := h.fetchRemoteEngines(c.Request.Context(), reader, overrides)
+	resp := h.resolveDocReader(c.Request.Context(), overrides)
+	connected := h.docreaderConnected(ctx, resp.reader, resp.hostOwned)
+	remoteEngines := h.fetchRemoteEngines(c.Request.Context(), resp.reader, overrides)
 	engines := docparser.ListAllEngines(connected, overrides, remoteEngines)
-	c.JSON(200, gin.H{"code": 0, "msg": "success", "data": engines, "docreader_addr": docreaderAddr, "docreader_transport": docreaderTransport, "connected": connected})
+	c.JSON(200, gin.H{"code": 0, "msg": "success", "data": engines, "docreader_addr": resp.docreaderAddr, "docreader_transport": resp.docreaderTransport, "connected": connected})
 }
 
 func (h *SystemHandler) docreaderConnected(ctx context.Context, reader interfaces.DocumentReader, hostOwned bool) bool {
@@ -459,19 +459,24 @@ func (h *SystemHandler) ReconnectDocReader(c *gin.Context) {
 		return
 	}
 
-	// SSRF validation for docreader address
-	if err := secutils.ValidateURLForSSRF(addr); err != nil {
-		logger.Warnf(c.Request.Context(), "SSRF validation failed for docreader addr: %v", err)
-		c.JSON(400, gin.H{"code": 1, "msg": secutils.FormatSSRFError("DocReader 地址", addr, err)})
-		return
-	}
-
+	// No SSRF check here: the handler does not know which transport this
+	// extension speaks, and secutils.ValidateURLForSSRF rejects every scheme
+	// that is not http/https — so screening the address up front would refuse
+	// the gRPC forms (host:port, dns:///host:port) before the host ever saw
+	// them. The host validates per transport in normalizeEndpointFor, and it is
+	// the only place that can: it has the manifest.
 	if h.documentReader == nil {
 		c.JSON(500, gin.H{"code": 1, "msg": "document converter not initialized"})
 		return
 	}
 
-	if err := h.documentReader.Reconnect(addr); err != nil {
+	if h.host == nil {
+		c.JSON(500, gin.H{"code": 1, "msg": "extension host not initialized"})
+		return
+	}
+
+	status, err := h.host.Reconnect(c.Request.Context(), extension.DocreaderExtesnionID, addr)
+	if err != nil {
 		logger.Errorf(c.Request.Context(), "Failed to reconnect docreader to %s: %v", addr, err)
 		c.JSON(200, gin.H{"code": 1, "msg": fmt.Sprintf("连接失败: %v", err)})
 		return
@@ -496,8 +501,15 @@ func (h *SystemHandler) ReconnectDocReader(c *gin.Context) {
 	connected := h.docreaderConnected(ctx, h.documentReader, true)
 	engines := docparser.ListAllEngines(connected, overrides, remoteEngines)
 
-	addr, transport := h.getDocReaderConnInfo(ctx)
-	c.JSON(200, gin.H{"code": 0, "msg": "连接成功", "data": engines, "docreader_addr": addr, "docreader_transport": transport, "connected": connected})
+	c.JSON(200, gin.H{
+		"code":                0,
+		"msg":                 "success",
+		"data":                engines,
+		"state":               string(status.State),
+		"docreader_addr":      status.Endpoint,
+		"docreader_transport": string(status.Transport),
+		"connected":           status.State == extension.StateServing,
+	})
 }
 
 // CheckParserEngines runs availability check with the given config overrides (e.g. current form values).
@@ -535,23 +547,47 @@ func (h *SystemHandler) CheckParserEngines(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	reader, docreaderAddr, docreaderTransport, hostOwned := h.resolveDocReader(c.Request.Context(), overrides)
-	connected := h.docreaderConnected(ctx, reader, hostOwned)
-	remoteEngines := h.fetchRemoteEngines(c.Request.Context(), reader, overrides)
+	resp := h.resolveDocReader(c.Request.Context(), overrides)
+	connected := h.docreaderConnected(ctx, resp.reader, resp.hostOwned)
+	remoteEngines := h.fetchRemoteEngines(c.Request.Context(), resp.reader, overrides)
 	engines := docparser.ListAllEngines(connected, overrides, remoteEngines)
-	c.JSON(200, gin.H{"code": 0, "msg": "success", "data": engines, "docreader_addr": docreaderAddr, "docreader_transport": docreaderTransport, "connected": connected})
+	c.JSON(200, gin.H{"code": 0, "msg": "success", "data": engines, "docreader_addr": resp.docreaderAddr, "docreader_transport": resp.docreaderTransport, "connected": connected})
 }
 
-func (h *SystemHandler) resolveDocReader(ctx context.Context, overrides map[string]string) (interfaces.DocumentReader, string, string, bool) {
+type resolveDocReaderResp struct {
+	reader             interfaces.DocumentReader
+	docreaderAddr      string
+	docreaderTransport string
+	hostOwned          bool
+}
+
+func (h *SystemHandler) resolveDocReader(ctx context.Context, overrides map[string]string) resolveDocReaderResp {
 	if len(overrides) > 0 {
 		if addr := strings.TrimSpace(overrides["docreader_addr"]); addr != "" && service.IsWeKnoraCloudDocReaderAddr(addr) {
 			reader := h.ResolveDocumentReader(ctx, addr)
-			return reader, addr, "https://" + addr, h.docreaderConnected(ctx, reader, true)
+			return resolveDocReaderResp{
+				reader:             reader,
+				docreaderAddr:      addr,
+				docreaderTransport: transportFromDocReaderAddr(addr),
+				hostOwned:          false,
+			}
 		}
 	}
 
 	addr, transport := h.getDocReaderConnInfo(ctx)
-	return h.documentReader, addr, transport, true
+	return resolveDocReaderResp{
+		reader:             h.documentReader,
+		docreaderAddr:      addr,
+		docreaderTransport: transport,
+		hostOwned:          true,
+	}
+}
+
+func transportFromDocReaderAddr(addr string) string {
+	if strings.HasPrefix(strings.ToLower(addr), "https://") {
+		return "https"
+	}
+	return "http"
 }
 
 // fetchRemoteEngines queries the remote docreader for its engine list.

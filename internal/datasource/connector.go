@@ -2,6 +2,7 @@ package datasource
 
 import (
 	"context"
+	"sync"
 
 	"github.com/Tencent/WeKnora/internal/types"
 )
@@ -95,30 +96,55 @@ type StreamingConnector interface {
 
 // ConnectorRegistry manages the registration and lookup of available connectors
 type ConnectorRegistry struct {
+	mu         sync.RWMutex
 	connectors map[string]Connector
+	metadatas  map[string]ConnectorMetadata
 }
 
 // NewConnectorRegistry creates a new connector registry
 func NewConnectorRegistry() *ConnectorRegistry {
-	return &ConnectorRegistry{
+	registry := &ConnectorRegistry{
 		connectors: make(map[string]Connector),
+		metadatas:  make(map[string]ConnectorMetadata),
 	}
+	for k, v := range connectorMetadataRegistry {
+		registry.metadatas[k] = v
+	}
+	return registry
 }
 
-// Register registers a connector with the registry
+// Register registers a connector with the registry.
+//
+// A duplicate type is refused rather than replaced: this registry is built once
+// during container start-up from a fixed list, so a second registration of the
+// same type can only be a wiring mistake, and silently keeping the last one
+// would route every sync of that type to whichever connector happened to be
+// registered second.
 func (r *ConnectorRegistry) Register(connector Connector) error {
 	if connector == nil {
 		return ErrConnectorNil
 	}
-	if connector.Type() == "" {
+	// Type() is third-party code: an implementation is free to take its own
+	// lock, or to be slow. Calling it once out here keeps it off r.mu, so a
+	// misbehaving connector cannot stall every other registry reader.
+	connectorType := connector.Type()
+	if connectorType == "" {
 		return ErrConnectorTypeEmpty
 	}
-	r.connectors[connector.Type()] = connector
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exist := r.connectors[connectorType]; exist {
+		return ErrConnectorRegistered
+	}
+	r.connectors[connectorType] = connector
 	return nil
 }
 
 // Get retrieves a connector by type
 func (r *ConnectorRegistry) Get(connectorType string) (Connector, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	connector, exists := r.connectors[connectorType]
 	if !exists {
 		return nil, ErrConnectorNotFound
@@ -128,6 +154,8 @@ func (r *ConnectorRegistry) Get(connectorType string) (Connector, error) {
 
 // List returns all registered connector types
 func (r *ConnectorRegistry) List() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	types := make([]string, 0, len(r.connectors))
 	for t := range r.connectors {
 		types = append(types, t)
@@ -148,7 +176,7 @@ type ConnectorMetadata struct {
 
 // GetConnectorMetadata returns metadata for all available connectors
 // This is used by the frontend to display connector options
-var ConnectorMetadataRegistry = map[string]ConnectorMetadata{
+var connectorMetadataRegistry = map[string]ConnectorMetadata{
 	types.ConnectorTypeFeishu: {
 		Type:         types.ConnectorTypeFeishu,
 		Name:         "Feishu (飞书)",
@@ -287,12 +315,65 @@ var ConnectorMetadataRegistry = map[string]ConnectorMetadata{
 	},
 }
 
+// BuiltinConnectorMetadata returns the compile-time connector metadata, keyed
+// by connector type.
+//
+// It exists because connectorMetadataRegistry is private: a package-level map
+// exported by name is readable and writable from anywhere, and a concurrent
+// read/write on a Go map is a fatal crash, not a stale value. Callers that need
+// the live set of a running registry should use ListAvailableConnectors on that
+// registry instead; this one answers "what does this build ship with", which is
+// what extension.NewHost needs for its reserved-id set.
+//
+// The returned map and every Capabilities slice in it are copies, so a caller
+// cannot mutate the table this process dispatches on.
+func BuiltinConnectorMetadata() map[string]ConnectorMetadata {
+	out := make(map[string]ConnectorMetadata, len(connectorMetadataRegistry))
+	for k, meta := range connectorMetadataRegistry {
+		cloned := meta
+		if meta.Capabilities != nil {
+			cloned.Capabilities = make([]string, len(meta.Capabilities))
+			copy(cloned.Capabilities, meta.Capabilities)
+		}
+		out[k] = cloned
+	}
+	return out
+}
+
+// BuiltinConnectorTypes returns the connector types this build ships with.
+//
+// These names are reserved for the extension host: a plugin that called itself
+// "feishu" would shadow a built-in in every list the UI renders, and the
+// operator would have no way to tell which one a sync actually used.
+func BuiltinConnectorTypes() map[string]struct{} {
+	out := make(map[string]struct{}, len(connectorMetadataRegistry))
+	for k := range connectorMetadataRegistry {
+		out[k] = struct{}{}
+	}
+	return out
+}
+
 // ListAvailableConnectors returns all available connector metadata
-// sorted by priority
-func ListAvailableConnectors() []ConnectorMetadata {
-	metadata := make([]ConnectorMetadata, 0, len(ConnectorMetadataRegistry))
-	for _, meta := range ConnectorMetadataRegistry {
-		metadata = append(metadata, meta)
+// sorted by priority.
+//
+// Capabilities is copied per entry: returning the registry's own slice would
+// hand callers a window into state this registry guards with r.mu, and the
+// copy is what makes the read lock mean something once the call returns.
+func (r *ConnectorRegistry) ListAvailableConnectors() []ConnectorMetadata {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	metadata := make([]ConnectorMetadata, 0, len(r.metadatas))
+
+	for _, meta := range r.metadatas {
+		clonedMeta := meta
+
+		if meta.Capabilities != nil {
+			clonedMeta.Capabilities = make([]string, len(meta.Capabilities))
+			copy(clonedMeta.Capabilities, meta.Capabilities)
+		}
+
+		metadata = append(metadata, clonedMeta)
 	}
 
 	// Sort by priority (insertion sort for simplicity)

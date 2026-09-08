@@ -16,16 +16,24 @@ import (
 type DataSourceHandler struct {
 	service   interfaces.DataSourceService
 	kbService interfaces.KnowledgeBaseService
+	// registry is the live connector registry, held directly rather than
+	// reached through a package-level table. The handler is also where
+	// plugin-provided datasources will be merged with the built-in ones: the
+	// merge cannot live in internal/datasource, because that package would then
+	// have to import internal/extension, which imports it back.
+	registry *datasource.ConnectorRegistry
 }
 
 // NewDataSourceHandler creates a new data source handler
 func NewDataSourceHandler(
 	service interfaces.DataSourceService,
 	kbService interfaces.KnowledgeBaseService,
+	registry *datasource.ConnectorRegistry,
 ) *DataSourceHandler {
 	return &DataSourceHandler{
 		service:   service,
 		kbService: kbService,
+		registry:  registry,
 	}
 }
 
@@ -607,6 +615,6 @@ func (h *DataSourceHandler) GetSyncLog(c *gin.Context) {
 // @Success 200 {object} []datasource.ConnectorMetadata
 // @Router /datasource/types [get]
 func (h *DataSourceHandler) GetAvailableConnectors(c *gin.Context) {
-	connectors := datasource.ListAvailableConnectors()
+	connectors := h.registry.ListAvailableConnectors()
 	c.JSON(http.StatusOK, connectors)
 }

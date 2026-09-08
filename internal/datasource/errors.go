@@ -9,9 +9,10 @@ import (
 // Error definitions for datasource operations
 var (
 	// Connector errors
-	ErrConnectorNil       = errors.New("connector is nil")
-	ErrConnectorTypeEmpty = errors.New("connector type is empty")
-	ErrConnectorNotFound  = errors.New("connector type not found in registry")
+	ErrConnectorNil        = errors.New("connector is nil")
+	ErrConnectorTypeEmpty  = errors.New("connector type is empty")
+	ErrConnectorNotFound   = errors.New("connector type not found in registry")
+	ErrConnectorRegistered = errors.New("connector is already registered")
 
 	// DataSource errors
 	ErrDataSourceNotFound  = errors.New("data source not found")

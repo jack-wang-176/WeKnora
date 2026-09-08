@@ -13,14 +13,21 @@ type remoteChannel struct {
 	mu       sync.RWMutex
 	health   healthPlan
 	conn     *grpc.ClientConn
+	target   string
 }
 
 var _ Channel = (*remoteChannel)(nil)
+var _ interface{ SetEndpoint(string) error } = (*remoteChannel)(nil)
 
 func newRemoteChannel(endpoint string, health healthPlan) (*remoteChannel, error) {
+	target, err := ValidateGRPCEndpoint(endpoint)
+	if err != nil {
+		return nil, err
+	}
 	c := &remoteChannel{
-		endpoint: endpoint,
+		endpoint: strings.TrimSpace(endpoint),
 		health:   health,
+		target:   target,
 	}
 	if err := c.connect(context.Background()); err != nil {
 		return nil, err
@@ -58,18 +65,14 @@ func (c *remoteChannel) Close() error {
 func (c *remoteChannel) connect(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.endpoint == "" {
+	if c.target == "" {
 		return ErrNotConfigured
 	}
 	opts, err := buildDialOptions()
 	if err != nil {
 		return err
 	}
-	target := c.endpoint
-	if !strings.Contains(target, "://") {
-		target = "dns:///" + target
-	}
-	conn, err := grpc.NewClient(target, opts...)
+	conn, err := grpc.NewClient(c.target, opts...)
 	if err != nil {
 		return err
 	}
@@ -77,18 +80,20 @@ func (c *remoteChannel) connect(ctx context.Context) error {
 	return nil
 }
 
-func (c *remoteChannel) SetEndpoint(addr string) {
-	addr = strings.TrimSpace(addr)
-	if addr == "" {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.endpoint = addr
-}
-
 func (c *remoteChannel) Endpoint() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.endpoint
+}
+
+func (c *remoteChannel) SetEndpoint(addr string) error {
+	target, err := ValidateGRPCEndpoint(addr)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.endpoint = strings.TrimSpace(addr)
+	c.target = target
+	return nil
 }

@@ -36,7 +36,7 @@ type ExtensionChannel interface {
 // at a different address. It is asserted, not required, because pointing an
 // extension somewhere else is the host's decision, not the reader's.
 type endpointSetter interface {
-	SetEndpoint(addr string)
+	SetEndpoint(addr string) error
 }
 
 // GRPCDocumentReader implements DocumentReader over gRPC.
@@ -126,7 +126,9 @@ func (p *GRPCDocumentReader) Reconnect(addr string) error {
 				addr,
 			)
 		}
-		setter.SetEndpoint(addr)
+		if err := setter.SetEndpoint(addr); err != nil {
+			return fmt.Errorf("cannot point docreader at %q: %w", addr, err)
+		}
 	}
 	return p.ch.Reconnect(context.Background())
 }

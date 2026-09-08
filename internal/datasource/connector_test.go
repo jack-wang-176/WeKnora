@@ -7,7 +7,7 @@ import (
 )
 
 func TestFeishuMetadataDoesNotAdvertiseWebhook(t *testing.T) {
-	meta := ConnectorMetadataRegistry[types.ConnectorTypeFeishu]
+	meta := BuiltinConnectorMetadata()[types.ConnectorTypeFeishu]
 
 	for _, capability := range meta.Capabilities {
 		if capability == "webhook" {

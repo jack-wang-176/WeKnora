@@ -16,8 +16,13 @@ import (
 const PluginDirsEnv = "WEKNORA_PLUGIN_DIRS"
 const DefaultPluginDir = "./plugin"
 const ManifestFileName = "plugin.yaml"
+const pluginEnvPrefix = "WEKNORA_PLUGIN_"
+const idSep = "--"
 
-var idRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,49}$`)
+var (
+	baseIDRe = regexp.MustCompile(`^[a-z0-9](?:-?[a-z0-9]){0,48}$`)
+	idRe     = regexp.MustCompile(`^[a-z0-9](?:-?[a-z0-9]){0,48}(?:--[a-z0-9]{1,36})?$`)
+)
 
 type discoverRequest struct {
 	dirs        []string
@@ -110,7 +115,7 @@ func discoverInDirectory(dir, hostVersion string, reserved map[string]struct{}) 
 			errs = append(errs, err)
 			continue
 		}
-		manifest, err := parseManifestFile(string(content), manifestPath, hostVersion, reserved)
+		manifest, err := parseManifestFile(string(content), hostVersion, reserved)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -122,75 +127,74 @@ func discoverInDirectory(dir, hostVersion string, reserved map[string]struct{}) 
 	return manifests, errors.Join(errs...)
 }
 
-func parseManifestFile(content string, dir string, hostVersion string, reserved map[string]struct{}) (*Manifest, error) {
+func restrictedExpand(s string, allow map[string]struct{}) (string, error) {
+	if s == "" {
+		return "", nil
+	}
+	var refused string
+	expanded := os.Expand(s, func(name string) string {
+		if refused != "" {
+			return ""
+		}
+		if _, ok := allow[name]; ok {
+			return os.Getenv(name)
+		}
+		if strings.HasPrefix(name, pluginEnvPrefix) {
+			return os.Getenv(name)
+		}
+		refused = name
+		return ""
+	})
+	if refused != "" {
+		return "", fmt.Errorf("%w: $%s", ErrUnauthorizedEnv, refused)
+	}
+	return expanded, nil
+}
+
+// expandRuntime expands the runtime fields through restrictedExpand.
+//
+// It depends on nothing but the manifest itself — no m.Dir, no filesystem
+// state — because the replay path in 24 §6.3 has to run it on manifests that
+// came out of the database, where "we wrote this row ourselves" is not a reason
+// to skip the allow-list.
+func expandRuntime(m *Manifest) error {
+	allow := make(map[string]struct{}, len(m.Permissions.Secrets))
+	for _, name := range m.Permissions.Secrets {
+		allow[name] = struct{}{}
+	}
+	endpoint, err := restrictedExpand(m.Runtime.Endpoint, allow)
+	if err != nil {
+		return fmt.Errorf("runtime.endpoint: %w", err)
+	}
+	exec, err := restrictedExpand(m.Runtime.Exec, allow)
+	if err != nil {
+		return fmt.Errorf("runtime.exec: %w", err)
+	}
+	args := make([]string, len(m.Runtime.Args))
+	for i, arg := range m.Runtime.Args {
+		expanded, err := restrictedExpand(arg, allow)
+		if err != nil {
+			return fmt.Errorf("runtime.args[%d]: %w", i, err)
+		}
+		args[i] = expanded
+	}
+	m.Runtime.Endpoint, m.Runtime.Exec, m.Runtime.Args = endpoint, exec, args
+	return nil
+}
+
+func parseManifestFile(content string, hostVersion string, reserved map[string]struct{}) (*Manifest, error) {
 	var m Manifest
 	if err := yaml.Unmarshal([]byte(content), &m); err != nil {
-		return nil, fmt.Errorf("%s illegal yaml: %w", dir, err)
+		return nil, err
 	}
-	m.Dir = dir
-	m.Runtime.Endpoint = os.ExpandEnv(m.Runtime.Endpoint)
-	m.Runtime.Exec = os.ExpandEnv(m.Runtime.Exec)
-	for i, arg := range m.Runtime.Args {
-		m.Runtime.Args[i] = os.ExpandEnv(arg)
+
+	if err := expandRuntime(&m); err != nil {
+		return nil, err
 	}
 	if err := m.Validate(hostVersion, reserved, m.Builtin); err != nil {
 		return nil, err
 	}
 	return &m, nil
-}
-
-func DefaultCriticality(kind Kind) string {
-	switch kind {
-	case KindDocParser:
-		return CriticalityRequired
-	default:
-		return CriticalityOptional
-	}
-}
-
-func (m *Manifest) Validate(hostVersion string, reserved map[string]struct{}, builtin bool) error {
-	where := m.Dir
-	if !idRe.MatchString(m.Metadata.ID) {
-		return fmt.Errorf("%s: metadata.id %q illegal: %w", where, m.Metadata.ID, ErrInvalidManifest)
-	}
-	if _, taken := reserved[m.Metadata.ID]; taken {
-		return fmt.Errorf("%s: metadata.id %q  name same with inner connectorer", where, m.Metadata.ID)
-	}
-
-	switch m.Extension.Kind {
-	case KindDatasource, KindDocParser, KindWebSearch:
-	default:
-		return fmt.Errorf("%s extension,type %q is not in {datasource,docparser,websearch}", where, m.Extension.Kind)
-	}
-	if !hostCompatible(m.Compatibility.Host, hostVersion) {
-		return fmt.Errorf("%s: need host %q, host is %s: %w", where, m.Compatibility.Host, hostVersion, ErrIncompatible)
-	}
-
-	switch c := strings.TrimSpace(m.Criticality); c {
-	case "":
-		m.Criticality = DefaultCriticality(m.Extension.Kind)
-	case CriticalityRequired, CriticalityOptional:
-		m.Criticality = c
-	default:
-		return fmt.Errorf("%s: criticality %q is not one of {%q, %q}: %w", where, m.Criticality, CriticalityRequired, CriticalityOptional, ErrInvalidManifest)
-	}
-
-	switch m.Runtime.Transport {
-	case TransportSubprocessGRPC:
-		if m.Runtime.Exec == "" {
-			return fmt.Errorf("%s: subprocess transport must provide runtime.exec", where)
-		}
-		if err := m.checkExecInsideDir(); err != nil {
-			return err
-		}
-	case TransportRemoteGRPC, TransportRemoteHTTP:
-		if m.Runtime.Endpoint == "" && !builtin {
-			return fmt.Errorf("%s: remote transport must provide runtime.endpoint", where)
-		}
-	default:
-		return fmt.Errorf("%s: runtime.transport %q 未知", where, m.Runtime.Transport)
-	}
-	return nil
 }
 
 func (m *Manifest) checkExecInsideDir() error {
@@ -236,4 +240,18 @@ func ResolvePluginDirs() []string {
 		return []string{DefaultPluginDir}
 	}
 	return out
+}
+
+func SplitID(id string) (base, tenant string) {
+	if i := strings.Index(id, idSep); i >= 0 {
+		return id[:i], id[i+len(idSep):]
+	}
+	return id, ""
+}
+
+func ScopedID(base, tenant string) string {
+	if tenant == "" {
+		return base
+	}
+	return base + idSep + tenant
 }

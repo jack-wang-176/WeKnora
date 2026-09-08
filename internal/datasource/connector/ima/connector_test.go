@@ -501,7 +501,7 @@ func TestFetchIncremental_RequiresResourceIDs(t *testing.T) {
 }
 
 func TestConnectorIsRegisteredInMetadata(t *testing.T) {
-	meta, ok := datasource.ConnectorMetadataRegistry[types.ConnectorTypeIMA]
+	meta, ok := datasource.BuiltinConnectorMetadata()[types.ConnectorTypeIMA]
 	if !ok {
 		t.Fatal("IMA connector missing from the metadata registry")
 	}

@@ -25,6 +25,7 @@ type httpConn struct {
 }
 
 var _ Channel = (*httpChannel)(nil)
+var _ interface{ SetEndpoint(string) error } = (*httpChannel)(nil)
 
 func (c *httpConn) Do(req *http.Request) (*http.Response, error) {
 	return c.client.Do(req)
@@ -127,14 +128,18 @@ func (h *httpChannel) Close() error {
 	return nil
 }
 
-func (h *httpChannel) SetEndpoint(addr string) {
-	addr = normalizeHTTPEndpoint(addr)
-	if addr == "" {
-		return
+func (h *httpChannel) SetEndpoint(addr string) error {
+	normalized := normalizeHTTPEndpoint(addr)
+	if normalized == "" {
+		return ErrInvalidAddr
+	}
+	if err := utils.ValidateURLForSSRF(normalized); err != nil {
+		return err
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.endpoint = addr
+	h.endpoint = normalized
+	return nil
 }
 
 func (h *httpChannel) Endpoint() string {

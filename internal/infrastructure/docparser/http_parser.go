@@ -29,7 +29,7 @@ type httpCarrier interface {
 }
 
 type endpointHttpSetter interface {
-	SetEndpoint(addr string)
+	SetEndpoint(addr string) error
 }
 
 type httpReadConfig struct {
@@ -107,7 +107,9 @@ func (p *HTTPDocumentReader) Reconnect(addr string) error {
 				addr,
 			)
 		}
-		setter.SetEndpoint(addr)
+		if err := setter.SetEndpoint(addr); err != nil {
+			return err
+		}
 	}
 	return p.ch.Reconnect(context.Background())
 }

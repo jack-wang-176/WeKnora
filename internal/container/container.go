@@ -1507,32 +1507,54 @@ func registerLangfuseCleanup(mgr *langfuse.Manager, cleaner interfaces.ResourceC
 }
 
 // initDocReaderClient initializes the DocumentReader client (lightweight API).
-func initDocReaderClient(cfg *config.Config, host extension.Host) (interfaces.DocumentReader, error) {
+// initDocReaderClient builds the document reader from the host's docreader
+// manifest.
+//
+// A failure here never fails start-up: the reader is returned disconnected and
+// the operator repoints it at runtime through /system/docreader/reconnect. That
+// is the whole point of the endpoint — a server that refuses to boot because a
+// converter is down cannot be used to fix the converter's address.
+func initDocReaderClient(host extension.Host) (interfaces.DocumentReader, error) {
+	ctx := context.Background()
+
 	m, ok := host.Get(extension.DocreaderExtesnionID)
 	if !ok {
+		// No manifest at all, so no transport to read: gRPC is the built-in
+		// docreader's transport and the only safe default.
 		return docparser.NewDisconnectedGRPCDocumentReader(), nil
 	}
-	ch, err := host.Open(context.Background(), extension.DocreaderExtesnionID)
 
-	ctx := context.Background()
-	switch {
-	case errors.Is(err, extension.ErrNotConfigured):
-		logger.Infof(ctx, "[DocConverter] docreader endpoint not configured, starting disconnected")
-		return disconnectedReaderFor(m), nil
-	case err != nil && m.IsRequired():
-		logger.Errorf(ctx, "[DocConverter] required extension %s failed to open: %v", m.Metadata.ID, err)
-		return disconnectedReaderFor(m), nil
-	case err != nil:
-		logger.Warnf(ctx, "[DocConverter] optional extension %s failed to open: %v", m.Metadata.ID, err)
+	ch, err := host.Open(ctx, extension.DocreaderExtesnionID)
+	if err != nil {
+		// One branch, three log lines: every outcome yields the same
+		// disconnected reader, so the difference belongs in the severity, not
+		// in three copies of the same return.
+		switch {
+		case errors.Is(err, extension.ErrNotConfigured):
+			logger.Infof(ctx, "[DocConverter] docreader endpoint not configured, starting disconnected")
+		case m.IsRequired():
+			logger.Errorf(ctx, "[DocConverter] required extension %s failed to open: %v", m.Metadata.ID, err)
+		default:
+			logger.Warnf(ctx, "[DocConverter] optional extension %s failed to open: %v", m.Metadata.ID, err)
+		}
 		return disconnectedReaderFor(m), nil
 	}
-	return docparser.NewGRPCDocumentReaderFromChannel(ch), nil
+	return connectedReaderFor(m, ch), nil
 }
+
 func disconnectedReaderFor(m *extension.Manifest) interfaces.DocumentReader {
 	if m.Runtime.Transport == extension.TransportRemoteHTTP {
 		return docparser.NewDisconnectedHTTPDocumentReader()
 	}
 	return docparser.NewDisconnectedGRPCDocumentReader()
+}
+
+func connectedReaderFor(m *extension.Manifest, ch extension.Channel) interfaces.DocumentReader {
+	if m.Runtime.Transport == extension.TransportRemoteHTTP {
+		return docparser.NewHTTPDocumentReader(ch)
+	}
+	// to grpc due to subprocess is grpc, so one judge cover all alternatives
+	return docparser.NewGRPCDocumentReaderFromChannel(ch)
 }
 
 func registerExtensionCleanup(host extension.Host, cleaner interfaces.ResourceCleaner) {
@@ -1588,10 +1610,8 @@ func initExtensionHostProvider() extension.Host {
 	ctx := context.Background()
 	hostVersion := resolveHostVersion()
 	dirs := extension.ResolvePluginDirs()
-	reserved := make(map[string]struct{}, len(datasource.ConnectorMetadataRegistry))
-	for id := range datasource.ConnectorMetadataRegistry {
-		reserved[id] = struct{}{}
-	}
+	// Built-in connector types are reserved so a plugin cannot shadow one.
+	reserved := datasource.BuiltinConnectorTypes()
 
 	manifests, err := extension.LoadManifests(dirs, hostVersion, reserved)
 	if err != nil {
@@ -1599,7 +1619,10 @@ func initExtensionHostProvider() extension.Host {
 	}
 	logger.Infof(ctx, "[PluginExtension] host version %s, %d manifest(s) from %v",
 		hostVersion, len(manifests), dirs)
-	return extension.NewHost(hostVersion, manifests)
+	// The same reserved set has to reach the host: LoadManifests only screens
+	// what is on disk at start-up, while Register and Reload accept manifests
+	// later, and those need to be held to the same rule.
+	return extension.NewHost(hostVersion, manifests, extension.WithReservedIDs(reserved))
 }
 
 // initOllamaService initializes the Ollama service client

@@ -441,7 +441,7 @@ const DEFAULT_PARSER_CONFIG: ParserEngineConfig = {
 
 const engines = ref<ParserEngineInfo[]>([])
 const docreaderAddrEnv = ref('')
-const docreaderTransport = ref<'grpc' | 'http'>('grpc')
+const docreaderTransport = ref<'grpc' | 'http' | 'https'>('grpc')
 const connected = ref(false)
 const loading = ref(true)
 const error = ref('')
@@ -539,7 +539,7 @@ async function loadEngines() {
     engines.value = res?.data ?? []
     docreaderAddrEnv.value = res?.docreader_addr ?? ''
     const transport = (res?.docreader_transport ?? 'grpc').toLowerCase()
-    docreaderTransport.value = transport === 'http' ? 'http' : 'grpc'
+    docreaderTransport.value = (transport === 'http' || transport === 'https') ? transport : 'grpc'
     connected.value = res?.connected ?? (engines.value.length > 0)
   } catch (e: any) {
     error.value = e?.message || t('settings.parser.loadFailed')
