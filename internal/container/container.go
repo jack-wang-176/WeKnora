@@ -303,6 +303,12 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	logger.Debugf(ctx, "[Container] Registering session service...")
 	must(container.Provide(service.NewSessionService))
 	must(container.Provide(service.NewTenantSkillService))
+	// The plugin service sits next to the skill service because it is the same
+	// shape of problem — a tenant-scoped install lifecycle — with one
+	// difference worth noting here: it takes the extension host, which the
+	// container already provides as a singleton. Two hosts would mean two
+	// answers to "is this plugin loaded".
+	must(container.Provide(service.NewPluginService))
 	// The member-facing half of env vars is its own service because its
 	// authority is different in kind: it derives the identity from the context
 	// and touches only that identity's rows.

@@ -27,6 +27,9 @@ type TenantPluginRepository interface {
 	ListGlobalPlugins(ctx context.Context) ([]*types.TenantPlugin, error)
 
 	// ListReadyPlugins returns every plugin the host should have loaded,
+	// which means ready AND enabled: disabling a plugin unregisters it from
+	// the host, so a replay that brought disabled rows back would undo that
+	// on the next restart.
 	// tenant-scoped rows included: the tenant dimension lives inside plugin_id
 	// (see TenantPlugin.PluginID), so the host does not need it split out and
 	// filtering on tenant_id here would silently drop every tenant plugin from
@@ -158,7 +161,7 @@ func (r *tenantPluginRepository) ListGlobalPlugins(ctx context.Context) ([]*type
 func (r *tenantPluginRepository) ListReadyPlugins(ctx context.Context) ([]*types.TenantPlugin, error) {
 	var list []*types.TenantPlugin
 	err := r.db.WithContext(ctx).
-		Where("status = ?", types.PluginStatusReady).
+		Where("status = ? AND enabled = ?", types.PluginStatusReady, true).
 		Order("created_at ASC").
 		Find(&list).Error
 	if err != nil {

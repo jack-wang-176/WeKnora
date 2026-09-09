@@ -53,6 +53,7 @@ const (
 
 type ManifestLoader func(context.Context) ([]*Manifest, error)
 type HostOption func(*host)
+
 // EndpointPersistFunc is called by Reconnect once — and only once — it knows
 // both facts nobody outside the host knows: the normalized form of the address
 // and that the reconnect actually worked. It runs before the in-memory write,
@@ -346,7 +347,7 @@ func (h *host) Ready(ctx context.Context) Readiness {
 // Replacing is allowed here and refused in datasource.ConnectorRegistry on
 // purpose: this registry is mutable at runtime (updating a plugin is a
 // re-register), that one is built once during process start, where a duplicate
-// can only be a配置 error.
+// can only be a error.
 //
 // Validation runs outside the lock: it only reads m plus two fields written
 // once in NewHost, and a rejected manifest must not make other registrations
@@ -673,6 +674,16 @@ func (h *host) Reconnect(ctx context.Context, id string, addr string) (Status, e
 // What it returns is the user's endpoint, not a dial target: remoteChannel
 // derives its own target in SetEndpoint, and echoing "dns:///host:port" back to
 // the UI would show the operator an address they never typed.
+// NormalizeEndpoint is the address check callers outside this package need
+// before they store an endpoint. It is deliberately the same function Reconnect
+// uses rather than a second implementation: the value written to the store has
+// to be the value the host would have produced, or the manifest rebuilt from
+// the store after a restart differs from the one registered live and the first
+// Reload tears down a healthy connection as "runtime changed".
+func NormalizeEndpoint(t Transport, addr string) (string, error) {
+	return normalizeEndpointFor(t, addr)
+}
+
 func normalizeEndpointFor(t Transport, addr string) (string, error) {
 	addr = strings.TrimSpace(addr)
 	if addr == "" {

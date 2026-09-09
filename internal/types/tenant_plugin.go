@@ -51,22 +51,22 @@ type TenantPlugin struct {
 	// for host.Register, so the base name is recomputed with extension.SplitID
 	// when needed rather than stored in a second column: two columns holding
 	// halves of the same fact have no answer for what to do when they disagree.
-	PluginID        string         `gorm:"column:plugin_id;type:varchar(255);not null" json:"plugin_id"`
-	Kind            string         `gorm:"column:kind;type:varchar(64);not null" json:"kind"`
-	Channel         string         `gorm:"column:channel;type:varchar(32);not null" json:"channel"`
-	Transport       string         `gorm:"column:transport;type:varchar(32);not null" json:"transport"`
-	Endpoint        *string        `gorm:"column:endpoint;type:varchar(1024)" json:"endpoint,omitempty"`
-	PolicyClass     string         `gorm:"column:policy_class;type:varchar(32);not null" json:"policy_class"`
-	SourceURL       *string        `gorm:"column:source_url;type:varchar(1024)" json:"source_url,omitempty"`
-	SourceRef       *string        `gorm:"column:source_ref;type:varchar(255)" json:"source_ref,omitempty"`
-	SourceSHA       *string        `gorm:"column:source_sha;type:varchar(64)" json:"source_sha,omitempty"`
-	ImageRef        *string        `gorm:"column:image_ref;type:varchar(1024)" json:"image_ref,omitempty"`
-	ContainerName   *string        `gorm:"column:container_name;type:varchar(255)" json:"container_name,omitempty"`
-	Status          string         `gorm:"column:status;type:varchar(32);not null;default:installing" json:"status"`
-	InstallingSince *time.Time     `gorm:"column:installing_since;type:timestamptz" json:"installing_since,omitempty"`
-	Enabled         bool           `gorm:"column:enabled;type:bool;not null;default:true" json:"enabled"`
-	Error           *string        `gorm:"column:error;type:text" json:"error,omitempty"`
-	Envs            JSONMap        `gorm:"column:envs;type:jsonb;not null;default:'{}'" json:"envs"`
+	PluginID        string     `gorm:"column:plugin_id;type:varchar(255);not null" json:"plugin_id"`
+	Kind            string     `gorm:"column:kind;type:varchar(64);not null" json:"kind"`
+	Channel         string     `gorm:"column:channel;type:varchar(32);not null" json:"channel"`
+	Transport       string     `gorm:"column:transport;type:varchar(32);not null" json:"transport"`
+	Endpoint        *string    `gorm:"column:endpoint;type:varchar(1024)" json:"endpoint,omitempty"`
+	PolicyClass     string     `gorm:"column:policy_class;type:varchar(32);not null" json:"policy_class"`
+	SourceURL       *string    `gorm:"column:source_url;type:varchar(1024)" json:"source_url,omitempty"`
+	SourceRef       *string    `gorm:"column:source_ref;type:varchar(255)" json:"source_ref,omitempty"`
+	SourceSHA       *string    `gorm:"column:source_sha;type:varchar(64)" json:"source_sha,omitempty"`
+	ImageRef        *string    `gorm:"column:image_ref;type:varchar(1024)" json:"image_ref,omitempty"`
+	ContainerName   *string    `gorm:"column:container_name;type:varchar(255)" json:"container_name,omitempty"`
+	Status          string     `gorm:"column:status;type:varchar(32);not null;default:installing" json:"status"`
+	InstallingSince *time.Time `gorm:"column:installing_since;type:timestamptz" json:"installing_since,omitempty"`
+	Enabled         bool       `gorm:"column:enabled;type:bool;not null;default:true" json:"enabled"`
+	Error           *string    `gorm:"column:error;type:text" json:"error,omitempty"`
+	Envs            JSONMap    `gorm:"column:envs;type:jsonb;not null;default:'{}'" json:"envs"`
 	// Permissions is the author's declaration, stored verbatim for audit.
 	// Verbatim means it carries no "already validated" marker: the replay path
 	// re-runs Manifest.Validate on every read, and a marker here would invite
@@ -95,4 +95,29 @@ func (TenantPlugin) TableName() string {
 
 func (TenantPluginSnapshot) TableName() string {
 	return "tenant_plugin_snapshots"
+}
+
+// PluginRegisterRequest is what a caller supplies to install one extension
+// through the `endpoint` channel.
+//
+// PluginID here is the BASE id, without a tenant suffix. The service composes
+// the stored id from it and TenantID (extension.ScopedID), which is the only
+// arrangement in which a tenant cannot name its plugin into another tenant's
+// namespace by sending `other--42` — a request that carries the full id would
+// have to be re-checked against the caller's tenant on every path that reads
+// it, and one missed path is a cross-tenant takeover.
+type PluginRegisterRequest struct {
+	// TenantID is nil for a process-level plugin.
+	TenantID    *uint64           `json:"tenant_id,omitempty"`
+	PluginID    string            `json:"plugin_id"`
+	Kind        string            `json:"kind"`
+	Transport   string            `json:"transport"`
+	Endpoint    string            `json:"endpoint"`
+	PolicyClass string            `json:"policy_class,omitempty"`
+	Envs        map[string]string `json:"envs,omitempty"`
+	// Permissions is the author's declaration, stored as received. The service
+	// does not synthesise entries into it: what is recorded has to stay
+	// answerable to "who claimed this", and a value this code invented has no
+	// answer.
+	Permissions map[string]any `json:"permissions,omitempty"`
 }
