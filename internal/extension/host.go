@@ -53,6 +53,16 @@ const (
 
 type ManifestLoader func(context.Context) ([]*Manifest, error)
 type HostOption func(*host)
+// EndpointPersistFunc is called by Reconnect once — and only once — it knows
+// both facts nobody outside the host knows: the normalized form of the address
+// and that the reconnect actually worked. It runs before the in-memory write,
+// so a failure to persist leaves the stored endpoint untouched rather than
+// producing a host that works until the next restart.
+//
+// It receives the full manifest id, tenant suffix included; the implementation
+// splits it with SplitID if it needs the tenant. It must not be given a tenant
+// parameter — the tenant dimension lives in the id.
+type EndpointPersistFunc func(ctx context.Context, id, normalizedEndpoint string) error
 
 // Locking discipline:
 //  1. A method holding h.mu must not call any other method on h.
@@ -71,6 +81,7 @@ type host struct {
 	remote      map[string]Channel
 	loader      ManifestLoader
 	reserved    map[string]struct{}
+	persist     EndpointPersistFunc
 }
 
 type Readiness struct {
@@ -104,6 +115,16 @@ func WithReservedIDs(ids map[string]struct{}) HostOption {
 		for id := range ids {
 			h.reserved[id] = struct{}{}
 		}
+	}
+}
+
+// WithPersistFunc installs the endpoint-persistence callback. Leaving it out
+// must stay equivalent to today's behaviour: docreader is builtin and takes its
+// endpoint from configuration, so persisting a reconnect for it would make the
+// next restart disagree with the deployment's own config.
+func WithPersistFunc(fn EndpointPersistFunc) HostOption {
+	return func(h *host) {
+		h.persist = fn
 	}
 }
 
@@ -568,6 +589,14 @@ func (h *host) Reconnect(ctx context.Context, id string, addr string) (Status, e
 	// Never connected: store the endpoint, then take exactly the path Open
 	// takes, so there is one way to build a channel and not two.
 	if ch == nil {
+		// Nothing is connected yet, so the endpoint has to reach the manifest
+		// before Open reads it. Persist first all the same: store, then memory.
+		if err := h.persistEndpoint(ctx, id, normalized); err != nil {
+			return Status{
+				ID: id, Transport: m.Runtime.Transport,
+				Endpoint: m.Runtime.Endpoint, State: StateUnavailable,
+			}, err
+		}
 		h.mu.Lock()
 		cur, still := h.manifests[id]
 		if !still {
@@ -604,6 +633,26 @@ func (h *host) Reconnect(ctx context.Context, id string, addr string) (Status, e
 			ID: id, Transport: m.Runtime.Transport,
 			Endpoint: normalized, State: StateUnavailable,
 		}, err
+	}
+
+	// The channel is already on the new address at this point. If the store
+	// refuses the write, put the channel back rather than reporting an old
+	// endpoint the process is no longer talking to. One attempt, no retry loop:
+	// a loop here would hold the caller while the same store keeps failing.
+	if err := h.persistEndpoint(ctx, id, normalized); err != nil {
+		restored := m.Runtime.Endpoint
+		if rerr := setter.SetEndpoint(restored); rerr == nil {
+			if rerr = ch.Reconnect(ctx); rerr != nil {
+				return Status{
+					ID: id, Transport: m.Runtime.Transport,
+					Endpoint: restored, State: StateUnavailable,
+				}, fmt.Errorf("persist endpoint: %w (restore failed: %v)", err, rerr)
+			}
+		}
+		return Status{
+			ID: id, Transport: m.Runtime.Transport,
+			Endpoint: restored, State: StateUnavailable,
+		}, fmt.Errorf("persist endpoint: %w", err)
 	}
 
 	h.mu.Lock()
@@ -676,4 +725,31 @@ func (h *host) ListForTenant(kind Kind, tenantID string) []*Manifest {
 		return out[i].Metadata.ID < out[j].Metadata.ID
 	})
 	return out
+}
+
+// persistEndpoint runs the persistence callback if one was installed. It is a
+// method only so the two Reconnect branches cannot drift apart; it must never
+// be called while h.mu is held, since the callback writes to a store and the
+// locking discipline at the top of this file keeps I/O out from under the lock.
+func (h *host) persistEndpoint(ctx context.Context, id, normalized string) error {
+	if h.persist == nil {
+		return nil
+	}
+	return h.persist(ctx, id, normalized)
+}
+
+// ReplayManifest prepares a manifest that did not come from a plugin directory
+// — today, one rebuilt from a database row — so Reload can accept it. It runs
+// the same two steps LoadManifests runs on disk: restricted env expansion, then
+// validation.
+//
+// There is deliberately no builtin parameter. Validate's third argument is
+// false here as it is on every other path that accepts outside data: a manifest
+// assembled from stored data must not get to decide that it is exempt from the
+// checks. builtin is set by compile-time injection and nowhere else.
+func ReplayManifest(m *Manifest, hostVersion string, reserved map[string]struct{}) error {
+	if err := expandRuntime(m); err != nil {
+		return err
+	}
+	return m.Validate(hostVersion, reserved, false)
 }

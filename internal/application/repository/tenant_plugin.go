@@ -26,6 +26,13 @@ type TenantPluginRepository interface {
 	// ListGlobalPlugins returns all process‑level (global) plugins.
 	ListGlobalPlugins(ctx context.Context) ([]*types.TenantPlugin, error)
 
+	// ListReadyPlugins returns every plugin the host should have loaded,
+	// tenant-scoped rows included: the tenant dimension lives inside plugin_id
+	// (see TenantPlugin.PluginID), so the host does not need it split out and
+	// filtering on tenant_id here would silently drop every tenant plugin from
+	// the start-up replay.
+	ListReadyPlugins(ctx context.Context) ([]*types.TenantPlugin, error)
+
 	// UpdatePlugin updates mutable fields of a plugin (status, error, enabled,
 	// container_name, etc.). This method does NOT touch envs or permissions.
 	UpdatePlugin(ctx context.Context, p *types.TenantPlugin) error
@@ -37,6 +44,13 @@ type TenantPluginRepository interface {
 	// UpdatePluginRuntime updates runtime information (container name and endpoint)
 	// written by the orchestrator.
 	UpdatePluginRuntime(ctx context.Context, id string, containerName *string, endpoint *string) error
+
+	// UpdateEndpointByPluginID repoints a plugin addressed by its full plugin
+	// id rather than its row id, and reports how many rows it touched. The
+	// extension host knows plugins by manifest id only, so this is the shape
+	// its endpoint-persistence callback can call; zero rows is not an error
+	// there, it means the extension is builtin or file-backed and has no row.
+	UpdateEndpointByPluginID(ctx context.Context, pluginID string, endpoint string) (int64, error)
 
 	// UpdatePluginEnvs updates only the environment variables (subject to the
 	// secrets whitelist).
@@ -141,6 +155,31 @@ func (r *tenantPluginRepository) ListGlobalPlugins(ctx context.Context) ([]*type
 	return list, nil
 }
 
+func (r *tenantPluginRepository) ListReadyPlugins(ctx context.Context) ([]*types.TenantPlugin, error) {
+	var list []*types.TenantPlugin
+	err := r.db.WithContext(ctx).
+		Where("status = ?", types.PluginStatusReady).
+		Order("created_at ASC").
+		Find(&list).Error
+	if err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+func (r *tenantPluginRepository) UpdateEndpointByPluginID(
+	ctx context.Context, pluginID string, endpoint string,
+) (int64, error) {
+	tx := r.db.WithContext(ctx).
+		Model(&types.TenantPlugin{}).
+		Where("plugin_id = ?", pluginID).
+		Updates(map[string]any{
+			"endpoint":   endpoint,
+			"updated_at": time.Now(),
+		})
+	return tx.RowsAffected, tx.Error
+}
+
 // UpdatePlugin updates mutable fields excluding envs and permissions.
 // This mirrors UpdateSkill – we list all updatable columns explicitly.
 func (r *tenantPluginRepository) UpdatePlugin(ctx context.Context, p *types.TenantPlugin) error {
@@ -207,7 +246,7 @@ func (r *tenantPluginRepository) UpdatePluginEnvs(ctx context.Context, id string
 		Model(&types.TenantPlugin{}).
 		Where("id = ?", id).
 		Updates(map[string]any{
-			"envs":       envs,
+			"envs":       types.JSONMap(toAnyMap(envs)),
 			"updated_at": time.Now(),
 		}).Error
 }
@@ -217,7 +256,7 @@ func (r *tenantPluginRepository) UpdatePluginPermissions(ctx context.Context, id
 		Model(&types.TenantPlugin{}).
 		Where("id = ?", id).
 		Updates(map[string]any{
-			"permissions": perms,
+			"permissions": types.JSONMap(perms),
 			"updated_at":  time.Now(),
 		}).Error
 }
@@ -233,11 +272,20 @@ func (r *tenantPluginRepository) DeletePlugin(ctx context.Context, tenantID *uin
 	return query.Delete(&types.TenantPlugin{}).Error
 }
 
+// toAnyMap widens a string map so it can be stored through types.JSONMap.
+func toAnyMap(in map[string]string) map[string]any {
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
 func (r *tenantPluginRepository) ListStaleInstalling(ctx context.Context, olderThan time.Time) ([]*types.TenantPlugin, error) {
 	var list []*types.TenantPlugin
 	err := r.db.WithContext(ctx).
 		Where("status IN ? AND installing_since IS NOT NULL AND installing_since < ?",
-			[]string{"installing", "removing"}, olderThan).
+			[]string{types.PluginStatusInstalling, types.PluginStatusRemoving}, olderThan).
 		Find(&list).Error
 	if err != nil {
 		return nil, err

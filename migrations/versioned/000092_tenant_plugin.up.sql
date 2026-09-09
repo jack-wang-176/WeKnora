@@ -18,8 +18,8 @@ CREATE TABLE IF NOT EXISTS tenant_plugins (
     installing_since    TIMESTAMPTZ   NULL,
     enabled             BOOLEAN       NOT NULL DEFAULT TRUE,
     error               TEXT          NULL,
-    envs                JSONB         NULL DEFAULT '{}'::jsonb,
-    permissions         JSONB         NULL DEFAULT '{}'::jsonb,
+    envs                JSONB         NOT NULL DEFAULT '{}'::jsonb,
+    permissions         JSONB         NOT NULL DEFAULT '{}'::jsonb,
     created_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
     deleted_at          TIMESTAMPTZ   NULL
@@ -37,7 +37,7 @@ COMMENT ON COLUMN tenant_plugins.permissions IS '原始权限声明 JSON，用�
 
 ALTER TABLE tenant_plugins 
 ADD CONSTRAINT chk_tenant_plugins_kind 
-CHECK (kind IN ('docparser', 'websearch', 'datasource', 'tool', 'mcp'));
+CHECK (kind IN ('docparser', 'websearch', 'datasource'));
 
 ALTER TABLE tenant_plugins 
 ADD CONSTRAINT chk_tenant_plugins_channel 
@@ -45,7 +45,7 @@ CHECK (channel IN ('builtin', 'bundle', 'endpoint'));
 
 ALTER TABLE tenant_plugins 
 ADD CONSTRAINT chk_tenant_plugins_transport 
-CHECK (transport IN ('remote-grpc', 'remote-http', 'local', 'wasm'));
+CHECK (transport IN ('remote-grpc', 'remote-http', 'subprocess-grpc'));
 
 ALTER TABLE tenant_plugins 
 ADD CONSTRAINT chk_tenant_plugins_policy 
@@ -71,7 +71,7 @@ CREATE INDEX IF NOT EXISTS idx_tenant_plugins_status_enabled
     ON tenant_plugins (status, enabled) WHERE deleted_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_tenant_plugins_installing_since
-    ON tenant_plugins (installing_since) WHERE status = 'installing' AND deleted_at IS NULL;
+    ON tenant_plugins (installing_since) WHERE status IN ('installing', 'removing') AND deleted_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_tenant_plugins_container
     ON tenant_plugins (container_name) WHERE container_name IS NOT NULL AND deleted_at IS NULL;

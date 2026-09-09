@@ -393,6 +393,12 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	must(container.Invoke(startTenantSkillReaper))
 	logger.Debugf(ctx, "[Container] Tenant skill reaper registered")
 
+	// Plugin replay runs here rather than inside the host provider: it needs a
+	// live database, and a constructor is the wrong place to discover that the
+	// database is not ready.
+	must(container.Invoke(replayPlugins))
+	logger.Debugf(ctx, "[Container] Extension plugins replayed")
+
 	// HTTP handlers layer
 	logger.Debugf(ctx, "[Container] Registering HTTP handlers...")
 	must(container.Provide(handler.NewTenantHandler))
@@ -1607,7 +1613,16 @@ func resolveHostVersion() string {
 	return "unknown"
 }
 
-func initExtensionHostProvider() extension.Host {
+// initExtensionHostProvider builds the extension host. It takes the plugin
+// repository rather than *gorm.DB because the host itself must not depend on a
+// database: what crosses the boundary is a loader function and a persistence
+// callback, both closures over the repository, so the extension package keeps
+// its "depends on nothing" property.
+//
+// Note what this function does NOT do: it never calls Reload. Replaying the
+// plugin table is I/O, and doing I/O in a dig constructor turns "the database
+// is slow" into "the container failed to build". See replayPlugins.
+func initExtensionHostProvider(plugins repository.TenantPluginRepository) extension.Host {
 	ctx := context.Background()
 	hostVersion := resolveHostVersion()
 	dirs := extension.ResolvePluginDirs()
@@ -1623,7 +1638,30 @@ func initExtensionHostProvider() extension.Host {
 	// The same reserved set has to reach the host: LoadManifests only screens
 	// what is on disk at start-up, while Register and Reload accept manifests
 	// later, and those need to be held to the same rule.
-	return extension.NewHost(hostVersion, manifests, extension.WithReservedIDs(reserved))
+	return extension.NewHost(hostVersion, manifests,
+		extension.WithReservedIDs(reserved),
+		extension.WithManifestLoader(service.NewManifestLoader(plugins, hostVersion, reserved)),
+		extension.WithPersistFunc(service.NewEndpointPersister(plugins)),
+	)
+}
+
+// replayPlugins loads the plugin table into the host once, after the container
+// is built. It is an Invoke rather than part of the host's constructor for the
+// reason given above, and it deliberately does not abort start-up on failure:
+// the only way an operator can delete the row that broke the replay is through
+// a server that came up.
+func replayPlugins(host extension.Host) {
+	ctx := context.Background()
+	result, err := host.Reload(ctx)
+	if err != nil {
+		logger.Errorf(ctx, "[PluginExtension] startup replay failed, continuing without stored plugins: %v", err)
+		return
+	}
+	logger.Infof(ctx, "[PluginExtension] startup replay: %d added, %d skipped",
+		len(result.Added), len(result.Skipped))
+	for id, reason := range result.Errors {
+		logger.Warnf(ctx, "[PluginExtension] %s not loaded: %s", id, reason)
+	}
 }
 
 // initOllamaService initializes the Ollama service client
