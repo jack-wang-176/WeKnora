@@ -97,15 +97,12 @@ func (TenantPluginSnapshot) TableName() string {
 	return "tenant_plugin_snapshots"
 }
 
-// PluginRegisterRequest is what a caller supplies to install one extension
-// through the `endpoint` channel.
+// PluginRegisterRequest installs one extension through the `endpoint` channel.
 //
-// PluginID here is the BASE id, without a tenant suffix. The service composes
-// the stored id from it and TenantID (extension.ScopedID), which is the only
-// arrangement in which a tenant cannot name its plugin into another tenant's
-// namespace by sending `other--42` — a request that carries the full id would
-// have to be re-checked against the caller's tenant on every path that reads
-// it, and one missed path is a cross-tenant takeover.
+// PluginID is the BASE id, without a tenant suffix: the service composes the
+// stored id from it and TenantID. Accepting a full id instead would mean
+// re-checking it against the caller's tenant on every path that reads it, and
+// one missed path is a cross-tenant takeover.
 type PluginRegisterRequest struct {
 	// TenantID is nil for a process-level plugin.
 	TenantID    *uint64           `json:"tenant_id,omitempty"`
@@ -115,9 +112,8 @@ type PluginRegisterRequest struct {
 	Endpoint    string            `json:"endpoint"`
 	PolicyClass string            `json:"policy_class,omitempty"`
 	Envs        map[string]string `json:"envs,omitempty"`
-	// Permissions is the author's declaration, stored as received. The service
-	// does not synthesise entries into it: what is recorded has to stay
-	// answerable to "who claimed this", and a value this code invented has no
-	// answer.
+	// Permissions is the author's declaration, stored as received. Nothing is
+	// synthesised into it: a value this code invented has no answer to "who
+	// claimed this".
 	Permissions map[string]any `json:"permissions,omitempty"`
 }

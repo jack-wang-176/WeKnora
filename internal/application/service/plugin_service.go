@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/Tencent/WeKnora/internal/application/repository"
@@ -14,10 +15,8 @@ import (
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 )
 
-// Errors this service returns to its callers. They are sentinels rather than
-// strings because the HTTP layer has to map them to different status codes and
-// a handler that matched on message text would break the first time one of
-// these sentences was reworded.
+// Sentinels, not strings: the HTTP layer maps them to different status codes,
+// and matching on message text would break the first reword.
 var (
 	ErrPluginInvalid  = errors.New("plugin: invalid request")
 	ErrPluginNotFound = errors.New("plugin: not found")
@@ -25,38 +24,33 @@ var (
 	ErrPluginDisabled = errors.New("plugin: disabled")
 )
 
-// auditScopePlugin is the scope_type every plugin audit row carries, so an
-// operator can pull the whole extension history of a workspace with one filter.
+// auditScopePlugin is the scope_type every plugin audit row carries, so one
+// filter pulls a workspace's whole extension history.
 const auditScopePlugin = "plugin"
 
-// pluginService owns the four writes that change what this process is willing
-// to connect to: register, uninstall, enable/disable, repoint.
+// pluginService owns the writes that change what this process is willing to
+// connect to: register, uninstall, enable/disable, repoint, credentials.
 //
-// Every one of them is ordered store-first, host-second. That is not a
-// preference between two orderings, it is the only one that survives a crash in
-// the middle: the host's map is rebuilt from the table on the next boot, so a
-// write that reached the host but not the table disappears, while one that
-// reached the table but not the host is replayed. The single exception is
-// Repoint, and it is an exception in appearance only — the host writes the
-// store itself there, through the callback installed in step 2, because only
-// the host knows the normalized address and whether the dial actually worked.
+// Every one is ordered store-first, host-second. That is not a preference: the
+// host's map is rebuilt from the table on the next boot, so a write that
+// reached the host but not the table disappears, while one that reached the
+// table but not the host is replayed. Repoint is the one exception, and only in
+// appearance — there the host writes the store itself, through the callback
+// installed in step 2, because only it knows the normalized address and whether
+// the dial worked.
 //
-// What this service deliberately does not have, compared with
-// TenantSkillService: the Redis config lock and its lease. Those exist to stop
-// two replicas from writing one shared artifact (a skill image pointer). The
-// `endpoint` channel builds nothing and shares nothing — the whole operation is
-// one row and one map entry — so a distributed lock here would buy nothing and
-// cost "Redis is down, therefore no plugin can be installed". It arrives with
-// the `bundle` channel, which does build images.
+// No Redis config lock, unlike TenantSkillService: that lock exists to stop two
+// replicas from building one shared artifact. The `endpoint` channel builds
+// nothing — one row, one map entry — so a distributed lock here would buy
+// nothing and cost "Redis is down, therefore no plugin can be installed".
 type pluginService struct {
 	plugins repository.TenantPluginRepository
 	host    extension.Host
 	audit   interfaces.AuditLogService
 
-	// locks serialises operations on one plugin within this process. The key is
-	// tenant + base id rather than the stored id so that a future "same plugin,
-	// two versions" lands on one lock: install, uninstall and repoint of one
-	// plugin must never interleave, and they would all share the base.
+	// locks serialises operations on one plugin within this process, keyed on
+	// tenant + base id: install, uninstall and repoint of one plugin must never
+	// interleave, and a future "same plugin, two versions" shares the base.
 	locks *keyedMutex
 
 	now func() time.Time
@@ -64,9 +58,9 @@ type pluginService struct {
 
 var _ interfaces.TenantPluginService = (*pluginService)(nil)
 
-// NewPluginService builds the plugin service. It takes the host rather than
-// building one: the host is a process-wide singleton holding live connections,
-// and a second one would mean two answers to "is this plugin loaded".
+// NewPluginService takes the host rather than building one: it is a
+// process-wide singleton holding live connections, and a second one would mean
+// two answers to "is this plugin loaded".
 func NewPluginService(
 	plugins repository.TenantPluginRepository,
 	host extension.Host,
@@ -81,20 +75,15 @@ func NewPluginService(
 	}
 }
 
-// Register installs one plugin through the `endpoint` channel.
+// Register installs one plugin through the `endpoint` channel: validate →
+// INSERT status=installing → normalize the address into the row → build the
+// manifest FROM THE ROW → host.Register → UPDATE status=ready.
 //
-// Order: validate → INSERT status=installing → normalize the address into the
-// row → build the manifest FROM THE ROW → host.Register → UPDATE status=ready.
-//
-// The manifest is built from the row and not from the request even though the
-// request is where the address came from. Two reasons, and the second is the
-// one that bites: the stored value has been through trimming, defaulting and a
-// jsonb round trip, so a manifest built from the request can differ from the
-// one the loader rebuilds after a restart — and the first Reload then sees
-// isRuntimeChanged, tears down a healthy connection and redials it. The other
-// reason is the `bundle` channel, where there is no address in the request at
-// all; one construction path is what keeps the two channels from producing
-// manifests that differ in a field nobody notices until a plugin misbehaves.
+// From the row, not from the request, even though the address came from the
+// request: the stored value has been through trimming, defaulting and a jsonb
+// round trip, so a manifest built from the request can differ from the one the
+// loader rebuilds after a restart — and the first Reload then sees a changed
+// runtime and tears down a healthy connection.
 func (s *pluginService) Register(
 	ctx context.Context, req *types.PluginRegisterRequest,
 ) (*types.TenantPlugin, error) {
@@ -123,17 +112,15 @@ func (s *pluginService) Register(
 		}
 	case existing.Status == types.PluginStatusFailed:
 		// A failed row is the one case where re-registering overwrites instead
-		// of refusing. Without this the only way out of a typo'd address is
-		// uninstall-then-register, and an operator staring at a row that says
-		// "failed" reasonably expects to be able to correct it in place.
+		// of refusing: otherwise the only way out of a typo'd address is
+		// uninstall-then-register.
 		row.ID = existing.ID
 		row.CreatedAt = existing.CreatedAt
 		if err := s.plugins.UpdatePlugin(ctx, row); err != nil {
 			return nil, err
 		}
-		// UpdatePlugin does not touch the two jsonb columns; they have their
-		// own setters so that an envs write cannot silently revert a
-		// permissions change made by another request.
+		// The two jsonb columns have their own setters so that an envs write
+		// cannot silently revert another request's permissions change.
 		if err := s.plugins.UpdatePluginEnvs(ctx, row.ID, req.Envs); err != nil {
 			return nil, err
 		}
@@ -151,8 +138,8 @@ func (s *pluginService) Register(
 			"endpoint":  derefString(row.Endpoint),
 			"error":     err.Error(),
 		})
-		// The row is returned alongside the error on purpose: it carries
-		// status=failed and the reason, which is what the caller has to show.
+		// The row goes back with the error on purpose: it carries status=failed
+		// and the reason, which is what the caller has to show.
 		return row, err
 	}
 	s.auditPlugin(ctx, row, types.AuditActionPluginRegistered, types.AuditOutcomeSuccess, map[string]any{
@@ -186,11 +173,9 @@ func (s *pluginService) Uninstall(ctx context.Context, tenantID *uint64, pluginI
 		return err
 	}
 	if _, err := s.host.Unregister(ctx, row.PluginID); err != nil && !errors.Is(err, extension.ErrNotFound) {
-		// ErrNotFound is success: the caller asked for "not loaded" and it is
-		// not loaded. Anything else — ErrBuiltinImmutable above all — is a
-		// refusal, and the row goes back to the status it had. Back to what it
-		// had, not to ready: a row that was failed is still failed, and calling
-		// it ready would erase the reason it never loaded.
+		// ErrNotFound is success: the caller asked for "not loaded". Anything
+		// else is a refusal, and the row goes back to the status it had — not
+		// to ready, which would erase the reason a failed row never loaded.
 		if uerr := s.plugins.UpdatePluginState(ctx, row.ID, prev, row.Error); uerr != nil {
 			logger.Errorf(ctx, "[PluginExtension] %s: unregister failed (%v) and the status rollback also failed: %v",
 				row.PluginID, err, uerr)
@@ -214,13 +199,10 @@ func (s *pluginService) Uninstall(ctx context.Context, tenantID *uint64, pluginI
 // SetEnabled turns a plugin off or back on.
 //
 // Off means unregistered from the host, not flagged in place. Under the
-// `endpoint` channel there is no container to stop, so "flagged" would leave
-// the connection in host.remote — still dialled by HealthAll, still counted by
-// /readyz — and the operator who disabled the plugin would keep seeing it.
-// Manifest.Disabled, the other shape, is for the `bundle` channel: there the
-// manifest stays in the host because stopping and starting a container costs
-// enough that re-enabling should not have to re-validate anything. One shape
-// per channel, and this is the endpoint channel's.
+// `endpoint` channel there is no container to stop, so a flag would leave the
+// connection dialled by HealthAll and counted by /readyz, and the operator who
+// disabled the plugin would keep seeing it. Manifest.Disabled is the `bundle`
+// channel's shape, where re-enabling should not have to re-validate anything.
 func (s *pluginService) SetEnabled(
 	ctx context.Context, tenantID *uint64, pluginID string, enabled bool,
 ) (*types.TenantPlugin, error) {
@@ -238,9 +220,8 @@ func (s *pluginService) SetEnabled(
 		return nil, s.classifyMissing(pluginID)
 	}
 	if row.Enabled == enabled {
-		// Already in the requested state. No write, and no audit row either:
-		// an audit trail that records non-events makes the real ones harder
-		// to find.
+		// No write and no audit row: recording non-events makes the real ones
+		// harder to find.
 		return row, nil
 	}
 
@@ -276,14 +257,13 @@ func (s *pluginService) SetEnabled(
 
 // Repoint moves a live plugin to a new address.
 //
-// This is the one write the service does not order itself, and that is the
-// payoff of the callback installed in step 2: the host writes the store from
-// inside Reconnect, at the one moment both facts are known — the normalized
-// form of the address, and that the reconnect actually succeeded. A service
-// that wrote the row first would be storing an address that may not answer;
-// one that wrote it afterwards would leave a window where the process talks to
-// an address the table has never heard of. So there is nothing to roll back
-// here: if the store write fails, Reconnect has already put the channel back.
+// The one write this service does not order itself: the host writes the store
+// from inside Reconnect, at the one moment both facts are known — the
+// normalized address, and that the reconnect succeeded. Writing the row first
+// would store an address that may not answer; writing it afterwards would leave
+// a window where the process talks to an address the table has never heard of.
+// So there is nothing to roll back: if the store write fails, Reconnect has
+// already put the channel back.
 func (s *pluginService) Repoint(
 	ctx context.Context, tenantID *uint64, pluginID string, endpoint string,
 ) (*types.TenantPlugin, error) {
@@ -301,8 +281,8 @@ func (s *pluginService) Repoint(
 		return nil, s.classifyMissing(pluginID)
 	}
 	if !row.Enabled {
-		// Reconnect would report this as "not found", which is true of the
-		// host and misleading to the caller: the plugin exists, it is off.
+		// Reconnect would report this as "not found", which is true of the host
+		// and misleading to the caller: the plugin exists, it is off.
 		return nil, fmt.Errorf("%s: %w", row.PluginID, ErrPluginDisabled)
 	}
 	previous := derefString(row.Endpoint)
@@ -317,9 +297,8 @@ func (s *pluginService) Repoint(
 		return nil, err
 	}
 
-	// Re-read rather than assume: the stored value is the host's normalized
-	// form, not the string the caller sent, and returning the request back to
-	// the caller would show them an address that is not what was saved.
+	// Re-read rather than assume: what was stored is the host's normalized form,
+	// not the string the caller sent.
 	updated, rerr := s.plugins.GetPluginByPluginID(ctx, row.TenantID, row.PluginID)
 	if rerr != nil || updated == nil {
 		if rerr != nil {
@@ -333,6 +312,37 @@ func (s *pluginService) Repoint(
 		"state": string(status.State),
 	})
 	return updated, nil
+}
+
+// SetEnvs replaces the plugin's credentials.
+//
+// Store only, no host call: under the `endpoint` channel the plugin process is
+// not ours, so env reaches it at its next load rather than now. The audit row
+// records key names only — the values are the secret.
+func (s *pluginService) SetEnvs(
+	ctx context.Context, tenantID *uint64, pluginID string, envs map[string]string,
+) (*types.TenantPlugin, error) {
+	release, err := s.locks.lock(ctx, pluginLockKey(tenantID, pluginID))
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	row, err := s.plugins.GetPluginByPluginID(ctx, tenantID, pluginID)
+	if err != nil {
+		return nil, err
+	}
+	if row == nil {
+		return nil, s.classifyMissing(pluginID)
+	}
+	if err := s.plugins.UpdatePluginEnvs(ctx, row.ID, envs); err != nil {
+		return nil, err
+	}
+	row.Envs = widenStringMap(envs)
+	s.auditPlugin(ctx, row, types.AuditActionPluginEnvsChanged, types.AuditOutcomeSuccess, map[string]any{
+		"keys": sortedEnvKeys(envs),
+	})
+	return row, nil
 }
 
 func (s *pluginService) Get(
@@ -358,9 +368,9 @@ func (s *pluginService) ListGlobal(ctx context.Context) ([]*types.TenantPlugin, 
 	return s.plugins.ListGlobalPlugins(ctx)
 }
 
-// activate makes a stored row live and records the outcome in the row itself.
-// It is shared by Register and by the enable half of SetEnabled so that the two
-// cannot end up with different notions of what "loaded" means.
+// activate makes a stored row live and records the outcome in the row. Shared
+// by Register and the enable half of SetEnabled so the two cannot end up with
+// different notions of what "loaded" means.
 func (s *pluginService) activate(ctx context.Context, row *types.TenantPlugin) error {
 	err := s.activateOnce(ctx, row)
 	if err == nil {
@@ -371,8 +381,8 @@ func (s *pluginService) activate(ctx context.Context, row *types.TenantPlugin) e
 		row.Error = nil
 		return nil
 	}
-	// The row stays. It is the only surface an operator has for reading why a
-	// plugin will not load, and a row deleted on failure takes that with it.
+	// The row stays: it is the only surface an operator has for reading why a
+	// plugin will not load.
 	msg := err.Error()
 	if uerr := s.plugins.UpdatePluginState(ctx, row.ID, types.PluginStatusFailed, &msg); uerr != nil {
 		logger.Errorf(ctx, "[PluginExtension] %s failed to load (%v), and recording the failure also failed: %v",
@@ -391,9 +401,8 @@ func (s *pluginService) activateOnce(ctx context.Context, row *types.TenantPlugi
 		return fmt.Errorf("endpoint: %w", err)
 	}
 	if derefString(row.Endpoint) != normalized {
-		// Store first, then build. The manifest below has to be built from the
-		// value the loader will read back after a restart, and that value is
-		// this one — not the string the caller typed.
+		// Store first, then build: the manifest has to be built from the value
+		// the loader will read back after a restart.
 		if err := s.plugins.UpdatePluginRuntime(ctx, row.ID, row.ContainerName, &normalized); err != nil {
 			return fmt.Errorf("store normalized endpoint: %w", err)
 		}
@@ -403,23 +412,18 @@ func (s *pluginService) activateOnce(ctx context.Context, row *types.TenantPlugi
 	if err != nil {
 		return err
 	}
-	// Register, never a direct write into the host's map: this is where the
-	// reserved-id check, the tenant downgrade of criticality and the manifest
-	// validation live, and a service that assembled the map itself would be
-	// bypassing all three.
+	// Register, never a direct write into the host's map: the reserved-id check,
+	// the tenant downgrade of criticality and manifest validation all live there.
 	if _, err := s.host.Register(ctx, m); err != nil {
 		return err
 	}
 	return nil
 }
 
-// classifyMissing answers "there is no row for this id" in the way that is true
-// rather than the way that is convenient. An id the host holds as builtin is
-// refused as immutable — docreader has no row and must not look uninstallable
-// merely because the table does not mention it. Anything else the host holds
-// without a row is file-backed, and this API does not manage the filesystem, so
-// it is reported as not found too rather than being quietly removed from the
-// host by an HTTP call.
+// classifyMissing answers "no row for this id" the way that is true rather than
+// convenient. A builtin id is refused as immutable — docreader has no row and
+// must not look uninstallable because of that. Anything else the host holds
+// without a row is file-backed, and this API does not manage the filesystem.
 func (s *pluginService) classifyMissing(pluginID string) error {
 	if m, ok := s.host.Get(pluginID); ok && m.Builtin {
 		return fmt.Errorf("%s: %w", pluginID, extension.ErrBuiltinImmutable)
@@ -428,9 +432,9 @@ func (s *pluginService) classifyMissing(pluginID string) error {
 }
 
 // pluginLockKey serialises operations on one plugin. The tenant is spelled out
-// separately from the id because a nil tenant is a scope, not a missing value:
-// the global "foo" and tenant 7's "foo--7" are different plugins and must not
-// share a lock, while tenant 7's install and uninstall of "foo--7" must.
+// separately because a nil tenant is a scope, not a missing value: global "foo"
+// and tenant 7's "foo--7" must not share a lock, while tenant 7's install and
+// uninstall of "foo--7" must.
 func pluginLockKey(tenantID *uint64, pluginID string) string {
 	base, _ := extension.SplitID(pluginID)
 	if tenantID == nil {
@@ -439,9 +443,18 @@ func pluginLockKey(tenantID *uint64, pluginID string) string {
 	return fmt.Sprintf("weknora-plugin:%d:%s", *tenantID, base)
 }
 
-// auditPlugin records one plugin operation. Failures to write the audit row are
-// logged and swallowed: an audit backend that is down must not be able to stop
-// an operator from removing a plugin that is causing an incident.
+func sortedEnvKeys(envs map[string]string) []string {
+	keys := make([]string, 0, len(envs))
+	for k := range envs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// auditPlugin records one plugin operation. A failure to write the audit row is
+// logged and swallowed: an audit backend that is down must not stop an operator
+// from removing a plugin that is causing an incident.
 func (s *pluginService) auditPlugin(
 	ctx context.Context,
 	row *types.TenantPlugin,

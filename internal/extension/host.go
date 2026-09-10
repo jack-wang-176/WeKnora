@@ -665,6 +665,14 @@ func (h *host) Reconnect(ctx context.Context, id string, addr string) (Status, e
 	return h.Health(ctx, id), nil
 }
 
+// NormalizeEndpoint normalizes an address for callers outside this package.
+// Same function Reconnect uses, deliberately: a stored value the host would not
+// have produced makes the manifest rebuilt after a restart differ from the live
+// one, and the first Reload then drops a healthy connection.
+func NormalizeEndpoint(t Transport, addr string) (string, error) {
+	return normalizeEndpointFor(t, addr)
+}
+
 // normalizeEndpointFor validates addr against the transport's own grammar and
 // returns the form to store in the manifest. It is the single authority for
 // endpoint validation, SSRF included: a handler does not know whether an
@@ -674,16 +682,6 @@ func (h *host) Reconnect(ctx context.Context, id string, addr string) (Status, e
 // What it returns is the user's endpoint, not a dial target: remoteChannel
 // derives its own target in SetEndpoint, and echoing "dns:///host:port" back to
 // the UI would show the operator an address they never typed.
-// NormalizeEndpoint is the address check callers outside this package need
-// before they store an endpoint. It is deliberately the same function Reconnect
-// uses rather than a second implementation: the value written to the store has
-// to be the value the host would have produced, or the manifest rebuilt from
-// the store after a restart differs from the one registered live and the first
-// Reload tears down a healthy connection as "runtime changed".
-func NormalizeEndpoint(t Transport, addr string) (string, error) {
-	return normalizeEndpointFor(t, addr)
-}
-
 func normalizeEndpointFor(t Transport, addr string) (string, error) {
 	addr = strings.TrimSpace(addr)
 	if addr == "" {

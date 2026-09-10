@@ -183,18 +183,16 @@ const (
 	AuditActionKBShareRemoved           AuditAction = "kb.share_removed"
 	AuditActionWikiContentChanged       AuditAction = "wiki.content_changed"
 
-	// Extension plugin lifecycle. All four change what the process is willing
-	// to connect to, so all four are recorded. plugin.repointed matters most:
-	// it is the only one that redirects live traffic, and a legitimate repoint
-	// and a hijack are identical in their parameters — the only thing that
-	// separates them is who did it and when, which is precisely what an audit
-	// row carries. Rows for process-level plugins use tenant_id=0, the same
-	// system-scope convention system.setting_changed uses.
+	// Plugin lifecycle. plugin.repointed matters most: it is the only one
+	// that redirects live traffic, and a legitimate repoint and a hijack
+	// differ only in who did it. Process-level rows use tenant_id=0, the
+	// same system-scope convention system.setting_changed uses.
 	AuditActionPluginRegistered  AuditAction = "plugin.registered"
 	AuditActionPluginUninstalled AuditAction = "plugin.uninstalled"
 	AuditActionPluginEnabled     AuditAction = "plugin.enabled"
 	AuditActionPluginDisabled    AuditAction = "plugin.disabled"
 	AuditActionPluginRepointed   AuditAction = "plugin.repointed"
+	AuditActionPluginEnvsChanged AuditAction = "plugin.envs_changed"
 
 	AuditActionFAQImportStarted   AuditAction = "faq.import_started"
 	AuditActionFAQImportCompleted AuditAction = "faq.import_completed"
