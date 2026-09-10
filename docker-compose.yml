@@ -370,6 +370,8 @@ services:
         condition: service_healthy
     networks:
       - WeKnora-network
+      # 插件容器只挂在 WeKnora-plugin-net 上；app 两张网都接，才能按容器名访问它们。
+      - WeKnora-plugin-net
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -1017,6 +1019,13 @@ services:
 networks:
   WeKnora-network:
     driver: bridge
+  # 插件容器专用网络。internal: true 只掐掉出网网关，不影响同网内互访，
+  # 因此 offline 策略的插件访问不了公网，app 仍能连上它。
+  # 显式 name 让 Go 侧的默认网络名不随 compose 项目名变化。
+  WeKnora-plugin-net:
+    name: WeKnora-plugin-net
+    driver: bridge
+    internal: true
 
 volumes:
   postgres-data:

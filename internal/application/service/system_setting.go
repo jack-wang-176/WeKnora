@@ -127,6 +127,16 @@ var registry = map[string]settingSpec{
 		Description: "SSRF 防护白名单。可填入 example.com / *.foo.com / 10.0.0.0/8 / 2001:db8::1。" +
 			"修改后立即生效。SSRF_WHITELIST_EXTRA 环境变量仍由部署方维护，不在此处覆盖。",
 	},
+	"ssrf.whitelist.plugins": {
+		Type: "string_list",
+		// No ENV fallback: this half of the whitelist is written by the plugin
+		// install flow, and a deploy-time env var would silently outrank it.
+		EnvName:  "",
+		Default:  []string{},
+		Category: "security",
+		Description: "插件装载流程自动维护的 SSRF 白名单，随 endpoint 插件的安装/卸载增删。" +
+			"与 ssrf.whitelist 合并后生效；手工编辑会在下次对账时被覆盖。",
+	},
 	"sandbox.docker_enabled": {
 		Type:     "bool",
 		EnvName:  sandbox.DockerBackendEnabledEnv,
@@ -494,7 +504,7 @@ func (s *systemSettingService) reload(ctx context.Context, key string) {
 // dispatcher trivial as we add more.
 func (s *systemSettingService) dispatchSideEffects(ctx context.Context, changedKey string) {
 	switch changedKey {
-	case "ssrf.whitelist":
+	case "ssrf.whitelist", pluginSSRFWhitelistKey:
 		s.applySSRFWhitelist(ctx)
 	case "model.max_concurrency":
 		s.applyModelMaxConcurrency(ctx)
@@ -513,19 +523,96 @@ func (s *systemSettingService) dispatchSideEffects(ctx context.Context, changedK
 // and after reload (peer's edit via pubsub).
 func (s *systemSettingService) applySSRFWhitelist(ctx context.Context) {
 	list := s.GetStringList(ctx, "ssrf.whitelist", "SSRF_WHITELIST", []string{})
-	primary := strings.Join(list, ",")
+	plugins := s.GetStringList(ctx, pluginSSRFWhitelistKey, "", []string{})
 	extra := strings.TrimSpace(os.Getenv("SSRF_WHITELIST_EXTRA"))
-	merged := primary
+
+	// Three independent sources, one parser. Concatenation is safe because
+	// parseSSRFWhitelistRaw drops empty entries, so a missing source costs at
+	// most a stray comma.
+	parts := make([]string, 0, len(list)+len(plugins)+1)
+	parts = append(parts, list...)
+	parts = append(parts, plugins...)
 	if extra != "" {
-		if merged == "" {
-			merged = extra
-		} else {
-			merged = merged + "," + extra
+		parts = append(parts, extra)
+	}
+	utils.SetSSRFWhitelistFromRaw(strings.Join(parts, ","))
+	logger.Infof(ctx,
+		"[system_settings] SSRF whitelist applied (%d admin entries, %d plugin entries, extra=%v)",
+		len(list), len(plugins), extra != "")
+}
+
+// pluginSSRFWhitelistKey holds the whitelist entries the plugin install flow
+// maintains. It is a separate key from ssrf.whitelist for two reasons: an
+// operator editing theirs never clobbers the runtime's, and reconciliation can
+// compare this set against the installed plugins without having to guess which
+// entries a human added by hand.
+const pluginSSRFWhitelistKey = "ssrf.whitelist.plugins"
+
+// PluginSSRFWhitelistEntries returns the runtime-owned whitelist set.
+func (s *systemSettingService) PluginSSRFWhitelistEntries(ctx context.Context) []string {
+	return s.GetStringList(ctx, pluginSSRFWhitelistKey, "", []string{})
+}
+
+// AddPluginSSRFWhitelistEntries adds entries to the runtime-owned whitelist.
+func (s *systemSettingService) AddPluginSSRFWhitelistEntries(ctx context.Context, entries ...string) error {
+	return s.mutatePluginSSRFWhitelist(ctx, entries, nil)
+}
+
+// RemovePluginSSRFWhitelistEntries drops entries from the runtime-owned whitelist.
+func (s *systemSettingService) RemovePluginSSRFWhitelistEntries(ctx context.Context, entries ...string) error {
+	return s.mutatePluginSSRFWhitelist(ctx, nil, entries)
+}
+
+// mutatePluginSSRFWhitelist applies add/remove as a set operation: read,
+// mutate, sort, write back. Set semantics rather than string concatenation
+// because the reconciliation criterion is set equality — the same host added
+// twice must not leave two entries behind for one uninstall to half-remove.
+//
+// The write goes through Update, not the repository, so the DB row, this
+// replica's cache, the live SSRF parser and the peer replicas all move
+// together; a repository write would take effect here and nowhere else.
+func (s *systemSettingService) mutatePluginSSRFWhitelist(ctx context.Context, add, remove []string) error {
+	current := s.GetStringList(ctx, pluginSSRFWhitelistKey, "", []string{})
+	set := make(map[string]struct{}, len(current)+len(add))
+	for _, entry := range current {
+		if entry = strings.TrimSpace(entry); entry != "" {
+			set[entry] = struct{}{}
 		}
 	}
-	utils.SetSSRFWhitelistFromRaw(merged)
-	logger.Infof(ctx, "[system_settings] SSRF whitelist applied (%d primary entries, extra=%v)",
-		len(list), extra != "")
+	for _, entry := range add {
+		if entry = strings.TrimSpace(entry); entry != "" {
+			set[entry] = struct{}{}
+		}
+	}
+	for _, entry := range remove {
+		delete(set, strings.TrimSpace(entry))
+	}
+
+	next := make([]string, 0, len(set))
+	for entry := range set {
+		next = append(next, entry)
+	}
+	sort.Strings(next)
+
+	// A no-op mutation must not write: install and reconciliation both call
+	// this on every pass, and each write publishes to every replica.
+	if slicesEqual(current, next) {
+		return nil
+	}
+	_, err := s.Update(ctx, pluginSSRFWhitelistKey, next)
+	return err
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // applyModelMaxConcurrency resolves model.max_concurrency via the 3-tier
@@ -1321,7 +1408,7 @@ func validateRegistryEntry(key string, rawValue any) error {
 		if n < 1 {
 			return errors.New("concurrency must be at least 1")
 		}
-	case "ssrf.whitelist":
+	case "ssrf.whitelist", pluginSSRFWhitelistKey:
 		// Coerce into the same shape encodeForType produced. We don't
 		// look at the encoded JSON because that's already canonicalised
 		// — easier to validate the raw input the user typed.

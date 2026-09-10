@@ -60,6 +60,16 @@ type SystemSettingService interface {
 	// non-nil so callers can iterate without a nil check.
 	GetStringList(ctx context.Context, key string, envName string, def []string) []string
 
+	// PluginSSRFWhitelistEntries / Add / Remove maintain the runtime-owned
+	// half of the SSRF whitelist (key ssrf.whitelist.plugins), which the
+	// plugin install flow writes as endpoint plugins come and go. Set
+	// semantics: entries are deduplicated and sorted, and a mutation that
+	// changes nothing writes nothing. The operator-owned ssrf.whitelist is
+	// never touched — the two are merged at apply time.
+	PluginSSRFWhitelistEntries(ctx context.Context) []string
+	AddPluginSSRFWhitelistEntries(ctx context.Context, entries ...string) error
+	RemovePluginSSRFWhitelistEntries(ctx context.Context, entries ...string) error
+
 	// List, Get, Update are the management-CRUD surface called by the
 	// SystemAdmin handlers (gated to user.is_system_admin = true at the
 	// router layer). Update emits an audit log on success.
