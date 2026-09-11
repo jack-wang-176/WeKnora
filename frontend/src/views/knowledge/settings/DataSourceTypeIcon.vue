@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { getDatasourceIconUrl, datasourceIconMap } from './datasourceIcons'
 
 const props = withDefaults(defineProps<{
@@ -6,10 +7,16 @@ const props = withDefaults(defineProps<{
   size?: number
   /** inline: 类型选择等小尺寸场景；badge: 嵌入 ds-card__badge 等父级徽章容器 */
   variant?: 'inline' | 'badge'
+  /** 后端 metadata 里的图标，内置图标表没有该类型时才用，URL 或 emoji 均可 */
+  src?: string
 }>(), {
   size: 20,
   variant: 'inline',
+  src: '',
 })
+
+const remoteSrc = computed(() => (/^(https?:|data:)/.test(props.src) ? props.src : ''))
+const glyph = computed(() => (props.src && !remoteSrc.value ? props.src : ''))
 
 const iconMap = datasourceIconMap
 
@@ -38,13 +45,13 @@ function fallbackText(type: string) {
     :style="variant === 'inline' ? { width: `${size}px`, height: `${size}px` } : undefined"
   >
     <img
-      v-if="iconMap[type]"
-      :src="iconMap[type]"
+      v-if="iconMap[type] || remoteSrc"
+      :src="iconMap[type] || remoteSrc"
       :alt="type"
       class="ds-type-icon__img"
       :style="variant === 'inline' ? { width: `${size}px`, height: `${size}px` } : undefined"
     >
-    <span v-else class="ds-type-icon-fallback">{{ fallbackText(type) }}</span>
+    <span v-else class="ds-type-icon-fallback">{{ glyph || fallbackText(type) }}</span>
   </span>
 </template>
 

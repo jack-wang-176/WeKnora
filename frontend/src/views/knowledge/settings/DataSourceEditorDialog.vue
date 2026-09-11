@@ -13,12 +13,13 @@ import {
   deleteDataSource,
   putDataSourceCredentials,
   deleteDataSourceCredentials,
+  getConnectorTypes,
   type DataSource,
   type Resource,
+  type ConnectorMeta,
 } from '@/api/datasource'
 import SettingDrawer from '@/components/settings/SettingDrawer.vue'
 import DataSourceTypeIcon from './DataSourceTypeIcon.vue'
-import { getDatasourceIconUrl } from './datasourceIcons'
 
 const props = defineProps<{
   kbId: string
@@ -496,7 +497,7 @@ interface ConnectorDef {
   }[]
 }
 
-const connectorDefs = computed<ConnectorDef[]>(() => [
+const builtinConnectorDefs = computed<ConnectorDef[]>(() => [
   {
     type: 'feishu',
     available: true,
@@ -635,6 +636,81 @@ const connectorDefs = computed<ConnectorDef[]>(() => [
   },
 ])
 
+// Connector metadata from the server, which is where plugin connectors live.
+// The builtin cards render without it, so a failed load costs nothing.
+const serverConnectors = ref<ConnectorMeta[]>([])
+
+async function loadServerConnectors() {
+  try {
+    const res: any = await getConnectorTypes()
+    serverConnectors.value = Array.isArray(res?.data) ? res.data : (res?.data?.data || [])
+  } catch {
+    serverConnectors.value = []
+  }
+}
+
+const serverConnectorByType = computed(
+  () => new Map(serverConnectors.value.map(m => [m.type, m])),
+)
+
+// A plugin connector declares auth_type and nothing finer, so that is the whole
+// credential contract this form can honour.
+function pluginCredentialFields(authType: string): ConnectorDef['fields'] {
+  switch (authType) {
+    case 'none':
+    case '':
+      return []
+    case 'basic':
+      return [
+        { key: 'username', labelKey: 'datasource.field.username', placeholder: '' },
+        { key: 'password', labelKey: 'datasource.field.password', placeholder: '', secret: true },
+      ]
+    case 'token':
+    case 'bearer':
+      return [{ key: 'token', labelKey: 'datasource.field.apiToken', placeholder: '', secret: true }]
+    default:
+      return [{ key: 'api_key', labelKey: 'datasource.field.apiKey', placeholder: '', secret: true }]
+  }
+}
+
+// Plugin connectors are appended after the builtins and never replace one: a
+// builtin keeps its own doc links and field list when a plugin claims its type.
+const connectorDefs = computed<ConnectorDef[]>(() => {
+  const builtin = builtinConnectorDefs.value
+  const known = new Set(builtin.map(d => d.type))
+  return [
+    ...builtin,
+    ...serverConnectors.value
+      .filter(m => !known.has(m.type))
+      .map<ConnectorDef>(m => ({
+        type: m.type,
+        available: true,
+        docUrl: '',
+        permissionDocUrl: '',
+        permissionPageUrl: '',
+        requiredPermissions: [],
+        fields: pluginCredentialFields(m.auth_type || ''),
+      })),
+  ]
+})
+
+// Name, description and icon fall back to the server metadata: this build has
+// no translation for a connector it did not ship with.
+function connectorLabel(type: string): string {
+  const key = `datasource.connector.${type}`
+  const translated = t(key)
+  return translated !== key ? translated : (serverConnectorByType.value.get(type)?.name || type)
+}
+
+function connectorDesc(type: string): string {
+  const key = `datasource.connectorDesc.${type}`
+  const translated = t(key)
+  return translated !== key ? translated : (serverConnectorByType.value.get(type)?.description || '')
+}
+
+function connectorIcon(type: string): string {
+  return serverConnectorByType.value.get(type)?.icon || ''
+}
 
 const currentDef = computed(() => connectorDefs.value.find(d => d.type === form.value.type))
 
@@ -651,6 +727,7 @@ watch(visible, async (v) => {
     }
     return
   }
+  loadServerConnectors()
   step.value = isEdit.value ? 1 : 0
   testResult.value = ''
   testErrorMsg.value = ''
@@ -765,7 +842,7 @@ watch(
 function selectType(def: ConnectorDef) {
   if (!def.available) return
   form.value.type = def.type
-  form.value.name = t(`datasource.connector.${def.type}`)
+  form.value.name = connectorLabel(def.type)
   form.value.config.credentials = {}
   if (isGitLabConnector(def.type)) addGitLabProject()
   rssAuthHeaders.value = []
@@ -1232,12 +1309,8 @@ const drawerConfirmText = computed(() => {
     @confirm="handleDrawerConfirm"
     @cancel="handleClose"
   >
-    <template v-if="form.type && getDatasourceIconUrl(form.type)" #headerIcon>
-      <img
-        :src="getDatasourceIconUrl(form.type)"
-        :alt="form.type"
-        class="datasource-header-icon__img"
-      >
+    <template v-if="form.type" #headerIcon>
+      <DataSourceTypeIcon :type="form.type" :src="connectorIcon(form.type)" :size="20" />
     </template>
 
     <template v-if="step === 1" #footer-left>
@@ -1306,11 +1379,11 @@ const drawerConfirmText = computed(() => {
           @click="selectType(def)"
         >
           <div class="ds-type-header">
-            <DataSourceTypeIcon :type="def.type" :size="20" />
-            <span class="ds-type-name">{{ t(`datasource.connector.${def.type}`) }}</span>
+            <DataSourceTypeIcon :type="def.type" :src="connectorIcon(def.type)" :size="20" />
+            <span class="ds-type-name">{{ connectorLabel(def.type) }}</span>
             <span v-if="!def.available" class="ds-type-soon">{{ t('datasource.comingSoon') }}</span>
           </div>
-          <div class="ds-type-desc">{{ t(`datasource.connectorDesc.${def.type}`) }}</div>
+          <div class="ds-type-desc">{{ connectorDesc(def.type) }}</div>
         </button>
       </div>
     </section>
