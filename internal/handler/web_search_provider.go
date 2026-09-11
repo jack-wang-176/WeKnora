@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/Tencent/WeKnora/internal/application/service"
 	"github.com/Tencent/WeKnora/internal/errors"
+	"github.com/Tencent/WeKnora/internal/extension"
 	"github.com/Tencent/WeKnora/internal/handler/dto"
 	infra_web_search "github.com/Tencent/WeKnora/internal/infrastructure/web_search"
 	"github.com/Tencent/WeKnora/internal/logger"
@@ -20,6 +22,7 @@ type WebSearchProviderHandler struct {
 	repo     interfaces.WebSearchProviderRepository
 	service  interfaces.WebSearchProviderService
 	registry *infra_web_search.Registry
+	host     extension.Host
 }
 
 // NewWebSearchProviderHandler creates a new handler
@@ -27,8 +30,9 @@ func NewWebSearchProviderHandler(
 	repo interfaces.WebSearchProviderRepository,
 	service interfaces.WebSearchProviderService,
 	registry *infra_web_search.Registry,
+	host extension.Host,
 ) *WebSearchProviderHandler {
-	return &WebSearchProviderHandler{repo: repo, service: service, registry: registry}
+	return &WebSearchProviderHandler{repo: repo, service: service, registry: registry, host: host}
 }
 
 // --- request DTOs ---
@@ -322,7 +326,7 @@ func (h *WebSearchProviderHandler) DeleteProvider(c *gin.Context) {
 func (h *WebSearchProviderHandler) ListProviderTypes(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data":    types.GetWebSearchProviderTypes(),
+		"data":    mergeWebSearchProviderTypes(c, h.host),
 	})
 }
 
@@ -411,7 +415,7 @@ func (h *WebSearchProviderHandler) TestProviderRaw(c *gin.Context) {
 // via /test instead.
 func (h *WebSearchProviderHandler) doTestSearch(ctx context.Context, providerType string, params types.WebSearchProviderParameters) error {
 	logger.Infof(ctx, "[WebSearch][Test] testing provider type=%s", providerType)
-	searchProvider, err := h.registry.CreateProvider(providerType, params)
+	searchProvider, err := service.ResolveWebSearchProvider(ctx, h.registry, h.host, providerType, params)
 	if err != nil {
 		logger.Warnf(ctx, "[WebSearch][Test] failed to create provider: %v", err)
 		return fmt.Errorf("failed to create provider: %w", err)

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Tencent/WeKnora/internal/config"
+	"github.com/Tencent/WeKnora/internal/extension"
 	infra_web_search "github.com/Tencent/WeKnora/internal/infrastructure/web_search"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/searchutil"
@@ -21,7 +22,10 @@ import (
 type WebSearchService struct {
 	registry     *infra_web_search.Registry
 	providerRepo interfaces.WebSearchProviderRepository
-	timeout      int
+	// host is consulted only after the registry misses, so a deployment with no
+	// plugins takes exactly the path it took before.
+	host    extension.Host
+	timeout int
 }
 
 // NewWebSearchService creates a new web search service.
@@ -30,6 +34,7 @@ func NewWebSearchService(
 	cfg *config.Config,
 	registry *infra_web_search.Registry,
 	providerRepo interfaces.WebSearchProviderRepository,
+	host extension.Host,
 ) (interfaces.WebSearchService, error) {
 	timeout := 10 // default timeout in seconds
 	if cfg.WebSearch != nil && cfg.WebSearch.Timeout > 0 {
@@ -39,6 +44,7 @@ func NewWebSearchService(
 	return &WebSearchService{
 		registry:     registry,
 		providerRepo: providerRepo,
+		host:         host,
 		timeout:      timeout,
 	}, nil
 }
@@ -106,7 +112,7 @@ func (s *WebSearchService) resolveProvider(
 		}
 
 		params := mergeProxyFromWebSearchConfig(entity.Parameters, cfg)
-		provider, err := s.registry.CreateProvider(string(entity.Provider), params)
+		provider, err := ResolveWebSearchProvider(ctx, s.registry, s.host, string(entity.Provider), params)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create provider %s (%s): %w", entity.Name, entity.Provider, err)
 		}
@@ -119,7 +125,7 @@ func (s *WebSearchService) resolveProvider(
 		params := mergeProxyFromWebSearchConfig(types.WebSearchProviderParameters{
 			APIKey: cfg.APIKey,
 		}, cfg)
-		provider, err := s.registry.CreateProvider(cfg.Provider, params)
+		provider, err := ResolveWebSearchProvider(ctx, s.registry, s.host, cfg.Provider, params)
 		if err != nil {
 			return nil, fmt.Errorf("web search provider %s is not available: %w", cfg.Provider, err)
 		}

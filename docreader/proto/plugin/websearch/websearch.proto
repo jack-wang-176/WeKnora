@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package weknora.plugin.websearch.v1;
+
+option go_package = "github.com/Tencent/WeKnora/docreader/proto/plugin/websearch;websearchv1";
+
+import "google/protobuf/timestamp.proto";
+
+service WebSearch {
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+  rpc Search(SearchRequest) returns (SearchResponse);
+}
+
+message DescribeRequest {}
+
+message DescribeResponse {
+  string id = 1;
+  string name = 2;
+  string version = 3;
+  repeated string capabilities = 4;
+}
+
+// Secrets are not carried here: the loader hands them to the container as envs
+// once, instead of once per request.
+message SearchRequest {
+  string query = 1;
+  int32 max_results = 2;
+  bool include_date = 3;
+  map<string, string> params = 4;
+}
+
+message SearchResult {
+  string title = 1;
+  string url = 2;
+  string snippet = 3;
+  string content = 4;
+  string source = 5;
+  google.protobuf.Timestamp published_at = 6;
+}
+
+message SearchResponse { repeated SearchResult results = 1; }
