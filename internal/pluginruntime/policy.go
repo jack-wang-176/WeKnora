@@ -24,12 +24,9 @@ const (
 // ErrPolicyUnsupported reports a policy class this runtime cannot enforce.
 var ErrPolicyUnsupported = errors.New("pluginruntime: policy class not enforceable by the docker runtime")
 
-// networkForPolicy maps a policy class onto a Docker network name. An empty
-// policy is treated as offline: the safe end of the range.
-//
-// "scoped" (egress limited to a declared host list) has no Docker equivalent —
-// the daemon filters at L3/L4 only. It fails loudly instead of degrading to
-// "open", which would hand the plugin exactly the egress its manifest forbids.
+// networkForPolicy maps a policy class onto a Docker network name; an empty
+// policy is offline, the safe end. "scoped" has no Docker equivalent — the
+// daemon filters at L3/L4 only — so it fails loudly rather than degrade to open.
 func networkForPolicy(policy string) (string, error) {
 	switch strings.TrimSpace(policy) {
 	case types.PluginPolicyOffline, "":

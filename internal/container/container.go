@@ -1545,13 +1545,11 @@ func registerLangfuseCleanup(mgr *langfuse.Manager, cleaner interfaces.ResourceC
 }
 
 // initDocReaderClient initializes the DocumentReader client (lightweight API).
-// initDocReaderClient builds the document reader from the host's docreader
-// manifest.
 //
-// A failure here never fails start-up: the reader is returned disconnected and
-// the operator repoints it at runtime through /system/docreader/reconnect. That
-// is the whole point of the endpoint — a server that refuses to boot because a
-// converter is down cannot be used to fix the converter's address.
+// Built from the host's docreader manifest. A failure never fails start-up: the
+// reader comes back disconnected and the operator repoints it through
+// /system/docreader/reconnect — a server that will not boot because a converter
+// is down cannot be used to fix the converter.
 func initDocReaderClient(host extension.Host) (interfaces.DocumentReader, error) {
 	reader, err := initBuiltinDocReader(host)
 	if err != nil {
@@ -1617,23 +1615,11 @@ func registerExtensionCleanup(host extension.Host, cleaner interfaces.ResourceCl
 	})
 }
 
-// resolveHostVersion returns the version the extension host advertises to
-// plugins, which manifests match against with compatibility.host.
+// resolveHostVersion returns the version manifests match with compatibility.host.
 //
-// It lives here rather than in internal/extension on purpose: the build-injected
-// version is handler.Version, and an import of internal/handler from
-// internal/extension would drag the whole application into the extension
-// package's dependency graph — and would become an import cycle the moment a
-// handler needs the host.
-//
-// Three sources, in order: the ldflags-injected version; the repository VERSION
-// file (make build and go run inject nothing, so handler.Version is the literal
-// "unknown" there and every plugin declaring compatibility.host would otherwise
-// be rejected); and finally "unknown", which only ever matches manifests that
-// declare no host constraint. The relative paths are walked because the working
-// directory differs between running from the repository root and from a cmd
-// subdirectory; inside the container image none of them exist, which is correct,
-// because there ldflags did inject a real version.
+// It lives here, not in internal/extension, because the ldflags version is
+// handler.Version and that import would become a cycle. Three sources in order:
+// ldflags, the repository VERSION file (make build injects nothing), "unknown".
 func resolveHostVersion() string {
 	if v := strings.TrimSpace(handler.Version); v != "" && v != "unknown" {
 		return v
@@ -1654,15 +1640,12 @@ func resolveHostVersion() string {
 	return "unknown"
 }
 
-// initExtensionHostProvider builds the extension host. It takes the plugin
-// repository rather than *gorm.DB because the host itself must not depend on a
-// database: what crosses the boundary is a loader function and a persistence
-// callback, both closures over the repository, so the extension package keeps
-// its "depends on nothing" property.
+// initExtensionHostProvider builds the extension host. It takes the repository
+// rather than *gorm.DB so what crosses the boundary is a loader closure and a
+// persistence callback, and the extension package keeps depending on nothing.
 //
-// Note what this function does NOT do: it never calls Reload. Replaying the
-// plugin table is I/O, and doing I/O in a dig constructor turns "the database
-// is slow" into "the container failed to build". See replayPlugins.
+// It never calls Reload: replaying the table is I/O, and I/O in a dig
+// constructor turns "the database is slow" into "the container failed to build".
 func initExtensionHostProvider(plugins repository.TenantPluginRepository) extension.Host {
 	ctx := context.Background()
 	hostVersion := resolveHostVersion()

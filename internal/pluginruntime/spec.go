@@ -11,12 +11,9 @@ import (
 // addressed by name on a dedicated network, where nothing else competes for it.
 const DefaultPort = 50051
 
-// Spec is everything the runtime needs to start one plugin container.
-//
-// It deliberately mentions neither types.TenantPlugin nor extension.Manifest:
-// this package is a stateless Docker adapter, and keeping those types out of
-// the signature is what stops it from growing a dependency on the store or the
-// extension host.
+// Spec is everything the runtime needs to start one plugin container. It
+// mentions neither types.TenantPlugin nor extension.Manifest, which is what
+// keeps this stateless Docker adapter off the store and the extension host.
 type Spec struct {
 	// ID is the scoped plugin id (`base--tenant`); it seeds the container name.
 	ID string

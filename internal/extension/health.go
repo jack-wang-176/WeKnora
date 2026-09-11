@@ -82,14 +82,12 @@ func statusFromErr(err error) Status {
 	}
 }
 
-// ProbeGRPC checks an address that is not registered with the host yet, which
-// is what the plugin install flow needs before it commits to Register.
+// ProbeGRPC checks an address the host has not registered yet, which is what the
+// install flow needs before it commits to Register.
 //
-// It goes through ValidateGRPCEndpoint so the probe is subject to the same SSRF
-// whitelist as the real traffic — an install that skipped that check would not
-// have tested the one thing most likely to be misconfigured. The TCP dial is
-// separate from the health RPC so "the container never came up" and "it came up
-// but is not serving gRPC" are distinguishable.
+// It goes through ValidateGRPCEndpoint so the probe faces the same SSRF
+// whitelist as real traffic. The TCP dial is separate from the health RPC so
+// "never came up" and "up but not serving gRPC" stay distinguishable.
 func ProbeGRPC(ctx context.Context, endpoint, service string, timeout time.Duration) error {
 	target, err := ValidateGRPCEndpoint(endpoint)
 	if err != nil {

@@ -55,15 +55,10 @@ const (
 type ManifestLoader func(context.Context) ([]*Manifest, error)
 type HostOption func(*host)
 
-// EndpointPersistFunc is called by Reconnect once — and only once — it knows
-// both facts nobody outside the host knows: the normalized form of the address
-// and that the reconnect actually worked. It runs before the in-memory write,
-// so a failure to persist leaves the stored endpoint untouched rather than
-// producing a host that works until the next restart.
-//
-// It receives the full manifest id, tenant suffix included; the implementation
-// splits it with SplitID if it needs the tenant. It must not be given a tenant
-// parameter — the tenant dimension lives in the id.
+// EndpointPersistFunc is called by Reconnect once it knows the two facts only
+// the host knows: the normalized address, and that the dial worked. It runs
+// before the in-memory write, so a persistence failure leaves the stored
+// endpoint untouched. The id carries the tenant suffix; split it with SplitID.
 type EndpointPersistFunc func(ctx context.Context, id, normalizedEndpoint string) error
 
 // Locking discipline:
@@ -71,10 +66,8 @@ type EndpointPersistFunc func(ctx context.Context, id, normalizedEndpoint string
 //  2. Helpers that require the caller to hold h.mu are named *Locked.
 //  3. Channel.Close()/Reconnect() are I/O: never call them under h.mu.
 //
-// Rule 1 is not a style preference: sync.RWMutex is not reentrant, so an
-// RLock taken while this goroutine holds Lock blocks forever — and it blocks
-// while holding the write lock, which freezes every other host method with no
-// error in the log.
+// Rule 1 is not style: RWMutex is not reentrant, so an RLock taken under Lock
+// blocks forever while holding the write lock, with nothing in the log.
 type host struct {
 	reloadmu    sync.Mutex
 	hostVersion string
@@ -341,18 +334,12 @@ func (h *host) Ready(ctx context.Context) Readiness {
 	return r
 }
 
-// Register adds or replaces a dynamically registered manifest. replaced
-// reports whether an entry with the same id already existed, which is what
-// lets a caller tell "installed" from "updated" in the UI and in the audit log.
+// Register adds or replaces a dynamically registered manifest. replaced tells
+// "installed" from "updated" for the UI and the audit log.
 //
-// Replacing is allowed here and refused in datasource.ConnectorRegistry on
-// purpose: this registry is mutable at runtime (updating a plugin is a
-// re-register), that one is built once during process start, where a duplicate
-// can only be a error.
-//
-// Validation runs outside the lock: it only reads m plus two fields written
-// once in NewHost, and a rejected manifest must not make other registrations
-// wait.
+// Replacing is allowed here and refused in datasource.ConnectorRegistry because
+// this registry is mutable at runtime — updating a plugin is a re-register.
+// Validation runs outside the lock: a rejected manifest must block no one.
 func (h *host) Register(ctx context.Context, m *Manifest) (replaced bool, err error) {
 	if m == nil {
 		return false, ErrInvalidManifest
@@ -392,12 +379,10 @@ func (h *host) Register(ctx context.Context, m *Manifest) (replaced bool, err er
 
 // Unregister removes a dynamically registered manifest and closes its channel.
 //
-// Built-in manifests are immutable, and that is a state-machine property rather
-// than a permission one: builtins are injected at compile time and never live
-// in the loader's source, so Reload cannot bring one back. Removing docreader
-// would leave Get returning not-found, Ready treating it as unknown-and-
-// therefore-not-required — a green /readyz — and uploads failing until the
-// process is restarted, which is exactly what this subsystem exists to avoid.
+// Built-in manifests are immutable as a state-machine property, not a
+// permission: they are injected at compile time and absent from the loader's
+// source, so Reload cannot bring one back. Removing docreader would leave a
+// green /readyz and failing uploads until a restart.
 func (h *host) Unregister(ctx context.Context, id string) (closed bool, err error) {
 	h.mu.Lock()
 	m, exist := h.manifests[id]
@@ -565,14 +550,9 @@ func calculateHealthHash(h HealthCheck) string {
 
 // Reconnect points one extension at a new endpoint and re-dials it.
 //
-// It mutates the channel in place rather than replacing it: callers such as
-// docparser.GRPCDocumentReader hold the channel itself, so swapping the
-// instance in h.remote would leave them talking on the old address while this
-// call reported success.
-//
-// The endpoint written back here lives only in memory. A caller that needs the
-// new address to survive a restart must write its own store first — see 24
-// §12.6.
+// The channel is mutated in place, not replaced: callers hold the channel
+// itself, so a swap would leave them on the old address. The endpoint written
+// here lives only in memory — see 24 §12.6.
 func (h *host) Reconnect(ctx context.Context, id string, addr string) (Status, error) {
 	// getLocked, not Get: Get takes RLock itself, and recursive read locking
 	// deadlocks as soon as a writer queues up between the two acquisitions.
@@ -674,15 +654,12 @@ func NormalizeEndpoint(t Transport, addr string) (string, error) {
 	return normalizeEndpointFor(t, addr)
 }
 
-// normalizeEndpointFor validates addr against the transport's own grammar and
-// returns the form to store in the manifest. It is the single authority for
-// endpoint validation, SSRF included: a handler does not know whether an
-// extension speaks gRPC or HTTP, so it cannot do this job without either
-// guessing or duplicating it.
+// normalizeEndpointFor validates addr against the transport's grammar and
+// returns the form to store. It is the single authority for endpoint validation,
+// SSRF included: a handler does not know which protocol an extension speaks.
 //
-// What it returns is the user's endpoint, not a dial target: remoteChannel
-// derives its own target in SetEndpoint, and echoing "dns:///host:port" back to
-// the UI would show the operator an address they never typed.
+// What it returns is the user's endpoint, not a dial target — remoteChannel
+// derives that in SetEndpoint.
 func normalizeEndpointFor(t Transport, addr string) (string, error) {
 	addr = strings.TrimSpace(addr)
 	if addr == "" {
@@ -711,13 +688,9 @@ func normalizeEndpointFor(t Transport, addr string) (string, error) {
 }
 
 // ListForTenant returns the manifests one tenant may see: host-wide ones plus
-// its own. The tenant dimension is read out of the id because that is the only
-// place it can live — h.remote is keyed by id, so a tenant passed as an
-// argument would have two tenants sharing one connection, and with it one
-// endpoint and one set of credentials.
-//
-// The filter has to exist before the first tenant plugin is stored, not after:
-// today it is a no-op, later it is a leak that no log can reconstruct.
+// its own. The tenant is read out of the id because that is the only place it
+// can live — h.remote is keyed by id, so a tenant argument would have two
+// tenants sharing one connection, one endpoint and one set of credentials.
 func (h *host) ListForTenant(kind Kind, tenantID string) []*Manifest {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -748,15 +721,11 @@ func (h *host) persistEndpoint(ctx context.Context, id, normalized string) error
 	return h.persist(ctx, id, normalized)
 }
 
-// ReplayManifest prepares a manifest that did not come from a plugin directory
-// — today, one rebuilt from a database row — so Reload can accept it. It runs
-// the same two steps LoadManifests runs on disk: restricted env expansion, then
-// validation.
+// ReplayManifest prepares a manifest rebuilt from a database row so Reload can
+// accept it: the same env expansion and validation LoadManifests runs on disk.
 //
-// There is deliberately no builtin parameter. Validate's third argument is
-// false here as it is on every other path that accepts outside data: a manifest
-// assembled from stored data must not get to decide that it is exempt from the
-// checks. builtin is set by compile-time injection and nowhere else.
+// There is no builtin parameter on purpose — stored data must not get to declare
+// itself exempt. builtin is set by compile-time injection and nowhere else.
 func ReplayManifest(m *Manifest, hostVersion string, reserved map[string]struct{}) error {
 	if err := expandRuntime(m); err != nil {
 		return err

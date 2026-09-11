@@ -26,14 +26,11 @@ type TenantPluginRepository interface {
 	// ListGlobalPlugins returns all process‑level (global) plugins.
 	ListGlobalPlugins(ctx context.Context) ([]*types.TenantPlugin, error)
 
-	// ListReadyPlugins returns every plugin the host should have loaded,
-	// which means ready AND enabled: disabling a plugin unregisters it from
-	// the host, so a replay that brought disabled rows back would undo that
-	// on the next restart.
-	// tenant-scoped rows included: the tenant dimension lives inside plugin_id
-	// (see TenantPlugin.PluginID), so the host does not need it split out and
-	// filtering on tenant_id here would silently drop every tenant plugin from
-	// the start-up replay.
+	// ListReadyPlugins returns every plugin the host should have loaded:
+	// ready AND enabled, because disabling unregisters from the host and a
+	// replay of disabled rows would undo that on the next restart. Tenant rows
+	// included — the tenant lives inside plugin_id, so filtering on tenant_id
+	// here would drop every tenant plugin from the replay.
 	ListReadyPlugins(ctx context.Context) ([]*types.TenantPlugin, error)
 
 	// UpdatePlugin updates mutable fields of a plugin (status, error, enabled,

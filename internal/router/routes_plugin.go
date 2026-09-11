@@ -6,22 +6,11 @@ import (
 	"github.com/Tencent/WeKnora/internal/handler"
 )
 
-// Plugins get two route groups rather than one group that inspects tenant_id,
-// because the permission difference between the scopes has to be visible to
-// assertAPIKeyPoliciesMatchRoutes at start-up — that self-check exists to catch
-// a new endpoint with no gate, and it can only read the route table.
-//
-// Tenant scope: Viewer+ reads, Admin+ writes. Installing points this process at
-// an address of the caller's choosing, so it is not a Contributor operation.
-//
-// Process scope: Admin+ throughout, reads included (24 §8.1), and full-access
-// API keys only — those plugins serve every tenant, and the listing alone names
-// what this process will connect to.
-//
-// The `bundle` channel adds two endpoints the `endpoint` channel had no use
-// for: /install, because a source has to be named somewhere, and /:id/events,
-// because a run that outlives its request needs somewhere to report progress.
-// Both share the scope rules above; events is a read, gated like the listing.
+// Two route groups, not one that inspects tenant_id: the scope difference has to
+// be visible to assertAPIKeyPoliciesMatchRoutes, which can only read the route
+// table. Tenant scope is Viewer+ read / Admin+ write; process scope is Admin+
+// throughout and full-access keys only, since those plugins serve every tenant.
+// The bundle channel adds /install and /:id/events under the same rules.
 func RegisterPluginRoutes(r *gin.RouterGroup, h *handler.PluginHandler, g *rbacGuards) {
 	plugins := g.apiKeyGroup(r.Group("/plugins"), apiKeyFullAccess())
 	{

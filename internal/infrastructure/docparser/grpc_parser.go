@@ -14,15 +14,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// ExtensionChannel is the slice of extension.Channel that this reader needs: a
-// carrier it can borrow a live connection from, plus the ability to ask that
-// carrier to dial again.
-//
-// It deliberately omits Close(): the extension host owns the connection's
-// lifetime, so "the reader closes a connection it only borrowed" is a compile
-// error here rather than a convention someone has to remember. extension.Channel
-// satisfies this interface structurally, so this package needs no import of
-// internal/extension and the dependency between the two stays one-way.
+// ExtensionChannel is the slice of extension.Channel this reader needs: borrow a
+// live connection, ask for a re-dial. Close() is omitted on purpose — the host
+// owns the connection's lifetime, so closing a borrowed one is a compile error.
+// extension.Channel satisfies it structurally, keeping the dependency one-way.
 type ExtensionChannel interface {
 	// Conn returns the live carrier, today a *grpc.ClientConn, or nil when the
 	// channel currently has none.
@@ -41,21 +36,9 @@ type endpointSetter interface {
 
 // GRPCDocumentReader implements DocumentReader over gRPC.
 //
-// It borrows its connection from an extension channel instead of dialing one.
-// The channel — and behind it the extension host — decides where to connect,
-// when to dial again and who closes; this type only decides what to say over
-// the wire.
-//
-// It therefore keeps neither a *grpc.ClientConn nor a proto.DocReaderClient of
-// its own. The stub is a free derivation of the connection
-// (proto.NewDocReaderClient is one struct allocation and no I/O), so deriving it
-// per call is cheaper than caching it and having to invalidate that cache every
-// time the owner dials again. Keeping no derived value is what makes
-// "reconnected, but still talking on the old connection" impossible rather than
-// merely unlikely.
-//
-// The single field is set at construction and never mutated, so the reader needs
-// no lock of its own; the channel guards its own connection swap.
+// It borrows the connection from an extension channel and keeps no stub: the
+// stub is derived per call, so a channel that dialled again is never talked to
+// on its old connection. The single field is never mutated, so no lock here.
 type GRPCDocumentReader struct {
 	ch ExtensionChannel
 }
@@ -78,12 +61,10 @@ func NewDisconnectedGRPCDocumentReader() *GRPCDocumentReader {
 
 var errNotConnected = fmt.Errorf("docreader service not connected")
 
-// conn returns the connection currently held by the channel, or nil.
-//
-// The assertion is to the concrete *grpc.ClientConn and the nil check is
-// explicit: a nil *grpc.ClientConn carried inside an interface value is not a
-// nil interface, so asserting to grpc.ClientConnInterface instead would report
-// success and defer the nil to a panic on the first RPC.
+// conn returns the connection currently held by the channel, or nil. The
+// assertion is to the concrete type and the nil check explicit: a nil
+// *grpc.ClientConn inside an interface is not a nil interface, so a looser
+// assertion would defer the nil to a panic on the first RPC.
 func (p *GRPCDocumentReader) conn() *grpc.ClientConn {
 	if p.ch == nil {
 		return nil
@@ -104,12 +85,9 @@ func (p *GRPCDocumentReader) client() (proto.DocReaderClient, error) {
 // Reconnect asks the owner of the connection to dial again.
 //
 // addr is applied only if the channel accepts an endpoint change. The reader
-// never dials by itself: a connection it created would be invisible to the
-// extension host, which would go on handing out and health-checking the old one
-// while this reader used another, and the old one would never be closed. An
-// address that cannot be applied is reported as an error rather than silently
-// ignored, so "reconnect succeeded" can never mean "reconnected to the address
-// you did not ask for".
+// never dials itself: a connection it created would be invisible to the host,
+// which would keep handing out and probing the old one. An address that cannot
+// be applied is an error, so success never means "reconnected somewhere else".
 func (p *GRPCDocumentReader) Reconnect(addr string) error {
 	if p.ch == nil {
 		return fmt.Errorf(

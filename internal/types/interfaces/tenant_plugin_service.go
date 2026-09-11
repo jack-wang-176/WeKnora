@@ -6,13 +6,12 @@ import (
 	"github.com/Tencent/WeKnora/internal/types"
 )
 
-// TenantPluginService is the write side of the plugin table: the operations
-// that change what this process is willing to connect to, plus the reads.
+// TenantPluginService is the write side of the plugin table — the operations
+// that change what this process will connect to — plus the reads.
 //
-// The tenant argument is not redundant with the id. The id already carries the
-// tenant suffix, but the tenant is what the query filters on, so a caller
-// holding tenant B's identity cannot act on tenant A's row by naming it. A nil
-// tenant is the process-level scope, not a missing value.
+// The tenant argument is not redundant with the id: the id carries the suffix,
+// but the query filters on the tenant, so holding tenant B's identity cannot
+// reach tenant A's row. A nil tenant is the process scope, not a missing value.
 type TenantPluginService interface {
 	// Register installs one plugin through the `endpoint` channel and makes it
 	// live in the same call. A failure after the row exists leaves the row

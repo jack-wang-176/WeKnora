@@ -459,12 +459,10 @@ func (h *SystemHandler) ReconnectDocReader(c *gin.Context) {
 		return
 	}
 
-	// No SSRF check here: the handler does not know which transport this
-	// extension speaks, and secutils.ValidateURLForSSRF rejects every scheme
-	// that is not http/https — so screening the address up front would refuse
-	// the gRPC forms (host:port, dns:///host:port) before the host ever saw
-	// them. The host validates per transport in normalizeEndpointFor, and it is
-	// the only place that can: it has the manifest.
+	// No SSRF check here: ValidateURLForSSRF rejects every non-http scheme,
+	// so screening up front would refuse the gRPC forms. The host validates
+	// per transport in normalizeEndpointFor — it is the one place with the
+	// manifest.
 	if h.documentReader == nil {
 		c.JSON(500, gin.H{"code": 1, "msg": "document converter not initialized"})
 		return

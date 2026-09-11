@@ -70,13 +70,11 @@ func NewDataSourceService(
 	}
 }
 
-// resolveConnector returns the builtin connector for connectorType, falling
-// back to a plugin-backed one when no builtin claims that type.
+// resolveConnector returns the builtin connector for connectorType, falling back
+// to a plugin-backed one when no builtin claims that type.
 //
 // Plugins are never registered into the builtin registry: it refuses duplicates
-// and has no unregister, so an install would be irreversible and a reinstall
-// impossible. Resolving here instead keeps installs reversible and makes the
-// connector visible to the tenant that owns it only.
+// and has no unregister, so an install would be irreversible.
 func (s *DataSourceService) resolveConnector(
 	ctx context.Context, connectorType string,
 ) (datasource.Connector, error) {
