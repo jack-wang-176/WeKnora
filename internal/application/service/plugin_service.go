@@ -394,30 +394,7 @@ func (s *pluginService) activate(ctx context.Context, row *types.TenantPlugin) e
 }
 
 func (s *pluginService) activateOnce(ctx context.Context, row *types.TenantPlugin) error {
-	normalized, err := extension.NormalizeEndpoint(
-		extension.Transport(row.Transport), derefString(row.Endpoint),
-	)
-	if err != nil {
-		return fmt.Errorf("endpoint: %w", err)
-	}
-	if derefString(row.Endpoint) != normalized {
-		// Store first, then build: the manifest has to be built from the value
-		// the loader will read back after a restart.
-		if err := s.plugins.UpdatePluginRuntime(ctx, row.ID, row.ContainerName, &normalized); err != nil {
-			return fmt.Errorf("store normalized endpoint: %w", err)
-		}
-		row.Endpoint = &normalized
-	}
-	m, err := manifestFromRow(row)
-	if err != nil {
-		return err
-	}
-	// Register, never a direct write into the host's map: the reserved-id check,
-	// the tenant downgrade of criticality and manifest validation all live there.
-	if _, err := s.host.Register(ctx, m); err != nil {
-		return err
-	}
-	return nil
+	return activatePluginRow(ctx, s.plugins, s.host, row)
 }
 
 // classifyMissing answers "no row for this id" the way that is true rather than

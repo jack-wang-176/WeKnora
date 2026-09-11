@@ -117,3 +117,30 @@ type PluginRegisterRequest struct {
 	// claimed this".
 	Permissions map[string]any `json:"permissions,omitempty"`
 }
+
+// Where a bundle-channel plugin comes from. The type is declared by the caller
+// rather than guessed from the string: a registry image ref and a git repo look
+// alike, and cloning an image ref reports an error nobody can act on.
+const (
+	PluginSourceImage   = "image"
+	PluginSourceVCS     = "vcs"
+	PluginSourceArchive = "archive"
+)
+
+// PluginInstallRequest installs one extension through the `bundle` channel:
+// this process builds or pulls an image and runs the container itself.
+//
+// PluginID is the BASE id, as in PluginRegisterRequest and for the same reason.
+// Manifest is the author's yaml, submitted verbatim — the image is opaque until
+// it runs, so asking for the declaration up front is what lets the flow reject
+// an illegal plugin before spending minutes on a pull.
+type PluginInstallRequest struct {
+	TenantID    *uint64           `json:"tenant_id,omitempty"`
+	PluginID    string            `json:"plugin_id"`
+	SourceType  string            `json:"source_type"`
+	SourceURL   string            `json:"source_url"`
+	SourceRef   string            `json:"source_ref,omitempty"`
+	PolicyClass string            `json:"policy_class,omitempty"`
+	Manifest    string            `json:"manifest"`
+	Envs        map[string]string `json:"envs,omitempty"`
+}

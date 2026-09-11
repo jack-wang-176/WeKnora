@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -79,4 +80,42 @@ func statusFromErr(err error) Status {
 	default:
 		return Status{State: StateNotServing, Message: err.Error(), Checked: true}
 	}
+}
+
+// ProbeGRPC checks an address that is not registered with the host yet, which
+// is what the plugin install flow needs before it commits to Register.
+//
+// It goes through ValidateGRPCEndpoint so the probe is subject to the same SSRF
+// whitelist as the real traffic — an install that skipped that check would not
+// have tested the one thing most likely to be misconfigured. The TCP dial is
+// separate from the health RPC so "the container never came up" and "it came up
+// but is not serving gRPC" are distinguishable.
+func ProbeGRPC(ctx context.Context, endpoint, service string, timeout time.Duration) error {
+	target, err := ValidateGRPCEndpoint(endpoint)
+	if err != nil {
+		return err
+	}
+	if timeout <= 0 {
+		timeout = defaultHealthTimeout
+	}
+	hostport := strings.TrimPrefix(target, grpcDialPrefix)
+	conn, err := net.DialTimeout("tcp", hostport, timeout)
+	if err != nil {
+		return fmt.Errorf("cannot reach %s: %w", hostport, err)
+	}
+	_ = conn.Close()
+
+	opts, err := buildDialOptions()
+	if err != nil {
+		return err
+	}
+	cc, err := grpc.NewClient(target, opts...)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = cc.Close() }()
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return checkHealthForGrpc(ctx, cc, service)
 }

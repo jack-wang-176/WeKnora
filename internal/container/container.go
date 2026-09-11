@@ -85,6 +85,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/models/embedding"
 	"github.com/Tencent/WeKnora/internal/models/limiter"
 	"github.com/Tencent/WeKnora/internal/models/utils/ollama"
+	"github.com/Tencent/WeKnora/internal/pluginruntime"
 	"github.com/Tencent/WeKnora/internal/router"
 	"github.com/Tencent/WeKnora/internal/storageallowlist"
 	"github.com/Tencent/WeKnora/internal/stream"
@@ -306,6 +307,22 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	// Takes the extension host, which the container provides as a singleton:
 	// two hosts would mean two answers to "is this plugin loaded".
 	must(container.Provide(service.NewPluginService))
+	// The `bundle` channel is optional: without a reachable Docker daemon both
+	// the runtime and the service are nil, and the routes answer 400 instead of
+	// failing one plugin at a time for what is really one missing socket.
+	must(container.Provide(initPluginRuntime))
+	must(container.Provide(func(
+		plugins repository.TenantPluginRepository,
+		runtime pluginruntime.Runtime,
+		host extension.Host,
+		settings interfaces.SystemSettingService,
+		rdb *redis.Client,
+	) *service.TenantPluginService {
+		if runtime == nil {
+			return nil
+		}
+		return service.NewTenantPluginService(plugins, runtime, host, settings, rdb)
+	}))
 	// The member-facing half of env vars is its own service because its
 	// authority is different in kind: it derives the identity from the context
 	// and touches only that identity's rows.
@@ -400,6 +417,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	// live database, and a constructor is the wrong place to discover that the
 	// database is not ready.
 	must(container.Invoke(replayPlugins))
+	must(container.Invoke(startTenantPluginReaper))
 	logger.Debugf(ctx, "[Container] Extension plugins replayed")
 
 	// HTTP handlers layer
@@ -417,7 +435,16 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	must(container.Provide(handler.NewMessageHandler))
 	must(container.Provide(handler.NewMessageSuggestionHandler))
 	must(container.Provide(handler.NewModelHandler))
-	must(container.Provide(handler.NewPluginHandler))
+	must(container.Provide(func(
+		svc interfaces.TenantPluginService, host extension.Host, bundle *service.TenantPluginService,
+	) *handler.PluginHandler {
+		if bundle == nil {
+			// Passing the typed nil would give the handler a non-nil interface
+			// holding a nil pointer, which no nil check can catch.
+			return handler.NewPluginHandler(svc, host, nil)
+		}
+		return handler.NewPluginHandler(svc, host, bundle)
+	}))
 	must(container.Provide(handler.NewSandboxConfigHandler))
 	must(container.Provide(func(
 		s *service.TenantSkillService, streams interfaces.StreamManager,
@@ -1890,6 +1917,40 @@ func startTenantSkillReaper(svc *service.TenantSkillService, cleaner interfaces.
 	}
 	cleaner.RegisterWithName("TenantSkillReaper", func() error {
 		svc.Stop()
+		return nil
+	})
+}
+
+// initPluginRuntime connects to the Docker daemon that runs bundle plugins.
+// A failure is not fatal: the deployment simply has no bundle channel, and one
+// warning here is clearer than a failure per install attempt.
+func initPluginRuntime() pluginruntime.Runtime {
+	ctx := context.Background()
+	rt, err := pluginruntime.NewDockerRuntime(pluginruntime.DefaultLimits)
+	if err != nil {
+		logger.Warnf(ctx, "[Container] plugin container runtime unavailable: %v", err)
+		return nil
+	}
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := rt.Ping(pingCtx); err != nil {
+		logger.Warnf(ctx, "[Container] Docker daemon unreachable, bundle plugins disabled: %v", err)
+		return nil
+	}
+	return rt
+}
+
+// startTenantPluginReaper starts the bundle channel's reconciliation cron and
+// registers its shutdown. Best-effort, like the skill reaper.
+func startTenantPluginReaper(svc *service.TenantPluginService, cleaner interfaces.ResourceCleaner) {
+	if svc == nil {
+		return
+	}
+	if err := svc.StartReaper(context.Background()); err != nil {
+		logger.Warnf(context.Background(), "[Container] tenant plugin reaper start failed: %v", err)
+	}
+	cleaner.RegisterWithName("TenantPluginReaper", func() error {
+		svc.StopReaper()
 		return nil
 	})
 }

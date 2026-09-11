@@ -40,10 +40,15 @@ func PluginProcessScope() gin.HandlerFunc {
 type PluginHandler struct {
 	service interfaces.TenantPluginService
 	host    extension.Host
+	// bundle serves the rows the endpoint channel does not own. It may be nil:
+	// without a container runtime there is no bundle channel to serve.
+	bundle bundlePluginService
 }
 
-func NewPluginHandler(svc interfaces.TenantPluginService, host extension.Host) *PluginHandler {
-	return &PluginHandler{service: svc, host: host}
+func NewPluginHandler(
+	svc interfaces.TenantPluginService, host extension.Host, bundle bundlePluginService,
+) *PluginHandler {
+	return &PluginHandler{service: svc, host: host, bundle: bundle}
 }
 
 // pluginResponse is the wire shape. Envs are reported as key names only: the
@@ -240,6 +245,10 @@ func (h *PluginHandler) Register(c *gin.Context) {
 // @Security     ApiKeyAuth
 // @Router       /plugins/{id} [delete]
 func (h *PluginHandler) Uninstall(c *gin.Context) {
+	if h.bundleRow(c) {
+		h.uninstallBundle(c)
+		return
+	}
 	if err := h.service.Uninstall(c.Request.Context(), pluginScope(c), c.Param("id")); err != nil {
 		respondPluginServiceError(c, err)
 		return
@@ -277,6 +286,10 @@ func (h *PluginHandler) Disable(c *gin.Context) {
 }
 
 func (h *PluginHandler) setEnabled(c *gin.Context, enabled bool) {
+	if h.bundleRow(c) {
+		h.setBundleEnabled(c, enabled)
+		return
+	}
 	row, err := h.service.SetEnabled(c.Request.Context(), pluginScope(c), c.Param("id"), enabled)
 	if err != nil {
 		respondPluginServiceError(c, err)

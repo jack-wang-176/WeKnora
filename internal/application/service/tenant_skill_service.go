@@ -101,7 +101,7 @@ type TenantSkillService struct {
 
 	// bundleCache keeps recently downloaded skill zips so the admin file
 	// browser (list + N reads) does not hit object storage on every click.
-	bundleCache *skillBundleArchiveCache
+	bundleCache *bundleArchiveCache
 	bundleLoad  singleflight.Group
 
 	cron    *cron.Cron
@@ -151,7 +151,7 @@ func NewTenantSkillService(
 		installHeartbeat:  skillInstallHeartbeatInterval,
 		localLocks:        newKeyedMutex(),
 		runCancels:        map[string]*skillRunCancel{},
-		bundleCache:       newSkillBundleArchiveCache(),
+		bundleCache:       newBundleArchiveCache(),
 		cron: cron.New(cron.WithSeconds(), cron.WithChain(
 			cron.Recover(cron.DefaultLogger),
 		)),

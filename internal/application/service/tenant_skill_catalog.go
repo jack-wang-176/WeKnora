@@ -554,7 +554,7 @@ func (s *TenantSkillService) ListCatalogFiles(
 func (s *TenantSkillService) ReadCatalogFile(
 	ctx context.Context, tenantID uint64, catalogID, relativePath string,
 ) (*SkillFileContent, error) {
-	clean, err := safeSkillFilePath(relativePath)
+	clean, err := safeBundleFilePath(relativePath)
 	if err != nil {
 		return nil, apperrors.NewBadRequestError(err.Error())
 	}
@@ -569,7 +569,7 @@ func (s *TenantSkillService) ReadCatalogFile(
 		}
 		return nil, err
 	}
-	return projectSkillFileContent(clean, body), nil
+	return projectBundleFileContent(clean, body), nil
 }
 
 func (s *TenantSkillService) loadCatalogArchive(
