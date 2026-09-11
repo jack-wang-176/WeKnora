@@ -163,6 +163,11 @@
                     <SkillSettings :initial-sandbox-id="currentSubSection" />
                   </div>
 
+                  <!-- 扩展插件：登记/安装后由各扩展点在调用时解析 -->
+                  <div v-if="currentSection === 'plugins'" class="section">
+                    <PluginSettings />
+                  </div>
+
                   <!-- 系统信息 -->
                   <div v-if="currentSection === 'system'" class="section">
                     <SystemInfo />
@@ -247,6 +252,7 @@ import ParserEngineSettings from './ParserEngineSettings.vue'
 import StorageEngineSettings from './StorageBackendSettings.vue'
 import SandboxSettings from './SandboxSettings.vue'
 import SkillSettings from './SkillSettings.vue'
+import PluginSettings from './PluginSettings.vue'
 import WeKnoraCloudSettings from './WeKnoraCloudSettings.vue'
 import TenantMembers from './TenantMembers.vue'
 import SystemSettings from '@/views/system/SystemSettings.vue'
@@ -379,6 +385,7 @@ const navItems = computed(() => {
     { key: 'storage', icon: 'cloud', label: t('settings.storageEngine') },
     { key: 'sandbox', icon: 'code', label: t('settings.sandbox.title') },
     { key: 'skills', icon: SKILL_ICON, label: t('settings.skills.title') },
+    { key: 'plugins', icon: 'extension', label: t('settings.plugins.title') },
     { key: 'mcp', icon: 'tools', label: t('settings.mcpService') },
     { key: 'system', icon: 'info-circle', label: t('settings.versionInfo') },
     { key: 'system-global', icon: 'server', label: t('settings.system') },
@@ -444,6 +451,7 @@ const navGroups = computed<NavGroup[]>(() => {
         'storage',
         'sandbox',
         'skills',
+        'plugins',
         'websearch',
         'mcp',
       ]),
