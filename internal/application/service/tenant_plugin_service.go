@@ -133,13 +133,12 @@ func (m *installMark) get() time.Time {
 	return m.at
 }
 
-// stillOwns answers the question every terminal write has to ask first: has
-// anything taken this row away from me since I last wrote it? Without it a
-// goroutine the reaper already gave up on can resurrect a state that was
-// cleaned up, leaving a ready row whose container is gone.
+// stillOwns answers what every terminal write must ask first: has anything taken
+// this row away from me since I last wrote it? Without it, a goroutine the
+// reaper gave up on can resurrect a ready row whose container is gone.
 //
-// row.Status is the phase the goroutine started in (installing or removing);
-// ownership ends the moment the stored row leaves it.
+// row.Status is the phase the goroutine started in; ownership ends when the
+// stored row leaves it.
 func (s *TenantPluginService) stillOwns(
 	ctx context.Context, row *types.TenantPlugin, mark *installMark,
 ) (*types.TenantPlugin, bool) {

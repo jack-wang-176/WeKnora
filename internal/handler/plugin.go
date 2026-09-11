@@ -32,11 +32,9 @@ func PluginProcessScope() gin.HandlerFunc {
 
 // PluginHandler serves both plugin scopes over one set of handlers.
 //
-// It validates nothing about the endpoint beyond trim and non-empty. Endpoint
-// grammar is the host's job and only the host can do it: a handler does not know
-// whether the extension speaks gRPC or HTTP, and the http/https-only URL check
-// would refuse the bare `host:port` and `dns:///host:port` forms that plugins
-// legitimately use.
+// It validates nothing about the endpoint beyond trim and non-empty: endpoint
+// grammar is the host's job, since a handler does not know whether the extension
+// speaks gRPC or HTTP and the URL check would refuse `host:port`.
 type PluginHandler struct {
 	service interfaces.TenantPluginService
 	host    extension.Host

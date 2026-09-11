@@ -28,21 +28,12 @@ var (
 // filter pulls a workspace's whole extension history.
 const auditScopePlugin = "plugin"
 
-// pluginService owns the writes that change what this process is willing to
-// connect to: register, uninstall, enable/disable, repoint, credentials.
+// pluginService owns the writes that change what this process will connect to.
 //
-// Every one is ordered store-first, host-second. That is not a preference: the
-// host's map is rebuilt from the table on the next boot, so a write that
-// reached the host but not the table disappears, while one that reached the
-// table but not the host is replayed. Repoint is the one exception, and only in
-// appearance — there the host writes the store itself, through the callback
-// installed in step 2, because only it knows the normalized address and whether
-// the dial worked.
-//
-// No Redis config lock, unlike TenantSkillService: that lock exists to stop two
-// replicas from building one shared artifact. The `endpoint` channel builds
-// nothing — one row, one map entry — so a distributed lock here would buy
-// nothing and cost "Redis is down, therefore no plugin can be installed".
+// Every one is ordered store-first, host-second: the host's map is rebuilt from
+// the table on the next boot, so a write that reached only the host disappears.
+// Repoint is the exception — the host writes the store itself, through the
+// callback, because only it knows the normalized address and whether it dialled.
 type pluginService struct {
 	plugins repository.TenantPluginRepository
 	host    extension.Host
@@ -76,14 +67,12 @@ func NewPluginService(
 }
 
 // Register installs one plugin through the `endpoint` channel: validate →
-// INSERT status=installing → normalize the address into the row → build the
-// manifest FROM THE ROW → host.Register → UPDATE status=ready.
+// INSERT installing → normalize into the row → build the manifest FROM THE ROW
+// → host.Register → UPDATE ready.
 //
-// From the row, not from the request, even though the address came from the
-// request: the stored value has been through trimming, defaulting and a jsonb
-// round trip, so a manifest built from the request can differ from the one the
-// loader rebuilds after a restart — and the first Reload then sees a changed
-// runtime and tears down a healthy connection.
+// From the row, not the request: the stored value went through trimming and a
+// jsonb round trip, so a request-built manifest can differ from the one the
+// loader rebuilds, and the first Reload would tear down a healthy connection.
 func (s *pluginService) Register(
 	ctx context.Context, req *types.PluginRegisterRequest,
 ) (*types.TenantPlugin, error) {
@@ -198,11 +187,10 @@ func (s *pluginService) Uninstall(ctx context.Context, tenantID *uint64, pluginI
 
 // SetEnabled turns a plugin off or back on.
 //
-// Off means unregistered from the host, not flagged in place. Under the
+// Off means unregistered from the host, not flagged in place: under the
 // `endpoint` channel there is no container to stop, so a flag would leave the
-// connection dialled by HealthAll and counted by /readyz, and the operator who
-// disabled the plugin would keep seeing it. Manifest.Disabled is the `bundle`
-// channel's shape, where re-enabling should not have to re-validate anything.
+// connection dialled by HealthAll and counted by /readyz. Manifest.Disabled is
+// the `bundle` channel's shape, where re-enabling revalidates nothing.
 func (s *pluginService) SetEnabled(
 	ctx context.Context, tenantID *uint64, pluginID string, enabled bool,
 ) (*types.TenantPlugin, error) {
@@ -258,12 +246,9 @@ func (s *pluginService) SetEnabled(
 // Repoint moves a live plugin to a new address.
 //
 // The one write this service does not order itself: the host writes the store
-// from inside Reconnect, at the one moment both facts are known — the
-// normalized address, and that the reconnect succeeded. Writing the row first
-// would store an address that may not answer; writing it afterwards would leave
-// a window where the process talks to an address the table has never heard of.
-// So there is nothing to roll back: if the store write fails, Reconnect has
-// already put the channel back.
+// from inside Reconnect, where both the normalized address and the dial result
+// are known. So there is nothing to roll back — a failed store write finds the
+// channel already put back.
 func (s *pluginService) Repoint(
 	ctx context.Context, tenantID *uint64, pluginID string, endpoint string,
 ) (*types.TenantPlugin, error) {

@@ -50,13 +50,9 @@ const (
 	bundleFileEncodingBase64 = "base64"
 	bundleFileEncodingBinary = "binary"
 
-	// The settings drawer lists the tree then immediately opens the entry
-	// file, and every later click is another read of the same zip. Keep a
-	// modest process-wide budget: 512 MiB is the install/decompress cap,
-	// not RAM this cache is allowed to pin. A zip larger than the budget
-	// is still cached so a large bundle's drawer does not re-download on
-	// every click, but it is the only occupant until something else is
-	// opened.
+	// The drawer lists the tree then opens the entry file, and every later
+	// click re-reads the same zip. 512 MiB is the install cap, not RAM this
+	// cache may pin; a zip over budget is still cached, as the sole occupant.
 	bundleArchiveCacheSlots = 8
 	bundleArchiveCacheBytes = 64 << 20
 )

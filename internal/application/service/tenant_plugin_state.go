@@ -6,12 +6,11 @@ import (
 	"github.com/Tencent/WeKnora/internal/types"
 )
 
-// canTransition is the only place that says which status changes are legal.
-// Six entry points share it so that adding a state is one edit, not six.
+// canTransition is the only place that says which status changes are legal, so
+// adding a state is one edit rather than six.
 //
-// There is no `disabled` status: a stopped plugin is `ready` with enabled=false.
-// Enabled is already a column, and a second spelling of the same fact has no
-// answer for what to do when the two disagree.
+// There is no `disabled` status: a stopped plugin is `ready` with enabled=false,
+// and a second spelling of one fact has no answer when the two disagree.
 func canTransition(from, to string) error {
 	if from == to {
 		return nil

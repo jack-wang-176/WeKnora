@@ -28,12 +28,11 @@ type pluginRuntimeStore interface {
 	UpdatePluginRuntime(ctx context.Context, id string, containerName *string, endpoint *string) error
 }
 
-// activatePluginRow is the one normalize -> store -> register sequence, shared
-// by both channels so they cannot drift apart.
+// activatePluginRow is the one normalize -> store -> register sequence, shared by
+// both channels so they cannot drift apart.
 //
-// It notifies nothing. The extension points that consume plugins ask the host
-// at use time instead, which keeps the dependency pointing one way and makes
-// an uninstall take effect without a second notification.
+// It notifies nothing: the extension points ask the host at use time, which
+// keeps the dependency one-way and makes an uninstall take effect at once.
 func activatePluginRow(
 	ctx context.Context, plugins pluginRuntimeStore, host extension.Host, row *types.TenantPlugin,
 ) error {
@@ -63,12 +62,10 @@ func activatePluginRow(
 	return nil
 }
 
-// parsePluginManifest reads the author's declaration. Only the facts the row
-// has to carry are taken from it; runtime.endpoint is ignored because the
-// address belongs to the container this process starts.
-//
-// Manifest.Validate is not run here: it requires a non-empty endpoint, which
-// does not exist until the container is up. host.Register runs it at step 7.
+// parsePluginManifest reads the author's declaration, taking only the facts the
+// row must carry; runtime.endpoint is ignored because the address belongs to the
+// container this process starts. Manifest.Validate needs that endpoint, so it
+// runs later, in host.Register.
 func parsePluginManifest(raw string) (*extension.Manifest, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, fmt.Errorf("%w: manifest is required", ErrPluginInvalid)

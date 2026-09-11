@@ -563,14 +563,12 @@ func (s *systemSettingService) RemovePluginSSRFWhitelistEntries(ctx context.Cont
 	return s.mutatePluginSSRFWhitelist(ctx, nil, entries)
 }
 
-// mutatePluginSSRFWhitelist applies add/remove as a set operation: read,
-// mutate, sort, write back. Set semantics rather than string concatenation
-// because the reconciliation criterion is set equality — the same host added
-// twice must not leave two entries behind for one uninstall to half-remove.
+// mutatePluginSSRFWhitelist applies add/remove as a set operation: read, mutate,
+// sort, write back. Set semantics because the criterion is set equality — the
+// same host added twice must not survive one uninstall.
 //
-// The write goes through Update, not the repository, so the DB row, this
-// replica's cache, the live SSRF parser and the peer replicas all move
-// together; a repository write would take effect here and nowhere else.
+// It writes through Update, not the repository, so the row, this replica's
+// cache, the live parser and the peers move together.
 func (s *systemSettingService) mutatePluginSSRFWhitelist(ctx context.Context, add, remove []string) error {
 	current := s.GetStringList(ctx, pluginSSRFWhitelistKey, "", []string{})
 	set := make(map[string]struct{}, len(current)+len(add))

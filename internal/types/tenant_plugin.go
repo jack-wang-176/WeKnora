@@ -6,12 +6,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// Plugin lifecycle states. The literals match the skill install state machine
-// on purpose — the same SQL an operator already knows works on both tables —
-// but the constants are defined here rather than shared with the skill ones:
-// sharing them turns "change the skill state machine" into "check whether it
-// breaks plugins", which is exactly the coupling the separate table exists to
-// avoid.
+// Plugin lifecycle states. The literals match the skill install state machine, so
+// the same SQL works on both tables, but the constants are separate: sharing them
+// would turn "change the skill machine" into "check whether plugins break".
 const (
 	PluginStatusInstalling = "installing"
 	PluginStatusReady      = "ready"
@@ -35,14 +32,10 @@ const (
 	PluginPolicyOpen    = "open"
 )
 
-// TenantPlugin is one installed extension.
-//
-// TenantID is NULL for a process-level plugin. Postgres leaves NULL out of
-// unique constraints, so the (tenant_id, plugin_id) uniqueness is expressed as
-// two partial unique indexes in migration 000092 — one for the tenant rows and
-// one for the global ones. Any query that filters by tenant must therefore
-// spell the NULL case out (`tenant_id IS NULL`) instead of comparing against a
-// sentinel.
+// TenantPlugin is one installed extension. TenantID is NULL for a process-level
+// plugin, and Postgres leaves NULL out of unique constraints, so
+// (tenant_id, plugin_id) uniqueness is two partial indexes in migration 000092.
+// Queries must spell `tenant_id IS NULL` rather than compare a sentinel.
 type TenantPlugin struct {
 	ID       string  `gorm:"primaryKey;column:id;type:varchar(36)" json:"id"`
 	TenantID *uint64 `gorm:"column:tenant_id;type:bigint;default:null" json:"tenant_id,omitempty"`
@@ -100,9 +93,8 @@ func (TenantPluginSnapshot) TableName() string {
 // PluginRegisterRequest installs one extension through the `endpoint` channel.
 //
 // PluginID is the BASE id, without a tenant suffix: the service composes the
-// stored id from it and TenantID. Accepting a full id instead would mean
-// re-checking it against the caller's tenant on every path that reads it, and
-// one missed path is a cross-tenant takeover.
+// stored id from it and TenantID. Accepting a full id would mean re-checking it
+// against the caller's tenant everywhere, and one missed path is a takeover.
 type PluginRegisterRequest struct {
 	// TenantID is nil for a process-level plugin.
 	TenantID    *uint64           `json:"tenant_id,omitempty"`
@@ -127,13 +119,12 @@ const (
 	PluginSourceArchive = "archive"
 )
 
-// PluginInstallRequest installs one extension through the `bundle` channel:
-// this process builds or pulls an image and runs the container itself.
+// PluginInstallRequest installs one extension through the `bundle` channel: this
+// process builds or pulls an image and runs the container itself.
 //
-// PluginID is the BASE id, as in PluginRegisterRequest and for the same reason.
-// Manifest is the author's yaml, submitted verbatim — the image is opaque until
-// it runs, so asking for the declaration up front is what lets the flow reject
-// an illegal plugin before spending minutes on a pull.
+// PluginID is the BASE id, as in PluginRegisterRequest. Manifest is the author's
+// yaml verbatim — the image is opaque until it runs, so the declaration up front
+// is what rejects an illegal plugin before spending minutes on a pull.
 type PluginInstallRequest struct {
 	TenantID    *uint64           `json:"tenant_id,omitempty"`
 	PluginID    string            `json:"plugin_id"`

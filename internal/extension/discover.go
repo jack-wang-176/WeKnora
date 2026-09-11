@@ -153,15 +153,9 @@ func restrictedExpand(s string, allow map[string]struct{}) (string, error) {
 
 // expandRuntime expands the runtime fields through restrictedExpand.
 //
-// It depends on nothing but the manifest itself — no m.Dir, no filesystem
-// state — because the replay path runs it on manifests that came out of the
-// database, where "we wrote this row ourselves" is not a reason to skip the
-// allow-list.
-//
-// Each failure names the field it came from. The caller of the replay path
-// writes this string into the plugin row's error column, and that is the only
-// thing the operator gets to see: "TOKEN is not declared in permissions.secrets"
-// without "runtime.endpoint:" in front of it does not say where to look.
+// It reads nothing but the manifest, because the replay path runs it on
+// manifests rebuilt from the database, where "we stored this" is no exemption.
+// Each failure names its field: that string is all the operator gets to see.
 func expandRuntime(m *Manifest) error {
 	allow := make(map[string]struct{}, len(m.Permissions.Secrets))
 	for _, name := range m.Permissions.Secrets {

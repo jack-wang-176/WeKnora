@@ -116,10 +116,8 @@ func NewConnectorRegistry() *ConnectorRegistry {
 // Register registers a connector with the registry.
 //
 // A duplicate type is refused rather than replaced: this registry is built once
-// during container start-up from a fixed list, so a second registration of the
-// same type can only be a wiring mistake, and silently keeping the last one
-// would route every sync of that type to whichever connector happened to be
-// registered second.
+// at start-up from a fixed list, so a second registration can only be a wiring
+// mistake, and keeping the last one would reroute every sync of that type.
 func (r *ConnectorRegistry) Register(connector Connector) error {
 	if connector == nil {
 		return ErrConnectorNil
@@ -315,18 +313,11 @@ var connectorMetadataRegistry = map[string]ConnectorMetadata{
 	},
 }
 
-// BuiltinConnectorMetadata returns the compile-time connector metadata, keyed
-// by connector type.
-//
-// It exists because connectorMetadataRegistry is private: a package-level map
-// exported by name is readable and writable from anywhere, and a concurrent
-// read/write on a Go map is a fatal crash, not a stale value. Callers that need
-// the live set of a running registry should use ListAvailableConnectors on that
-// registry instead; this one answers "what does this build ship with", which is
-// what extension.NewHost needs for its reserved-id set.
-//
-// The returned map and every Capabilities slice in it are copies, so a caller
-// cannot mutate the table this process dispatches on.
+// BuiltinConnectorMetadata returns the compile-time connector metadata, keyed by
+// type, as copies — exporting the map itself would invite a concurrent map
+// write, which is a crash. It answers "what does this build ship with", which is
+// what extension.NewHost needs for its reserved ids; ListAvailableConnectors
+// answers what a running registry holds.
 func BuiltinConnectorMetadata() map[string]ConnectorMetadata {
 	out := make(map[string]ConnectorMetadata, len(connectorMetadataRegistry))
 	for k, meta := range connectorMetadataRegistry {
@@ -356,9 +347,8 @@ func BuiltinConnectorTypes() map[string]struct{} {
 // ListAvailableConnectors returns all available connector metadata
 // sorted by priority.
 //
-// Capabilities is copied per entry: returning the registry's own slice would
-// hand callers a window into state this registry guards with r.mu, and the
-// copy is what makes the read lock mean something once the call returns.
+// Capabilities is copied per entry: handing back the registry's own slice would
+// be a window into state r.mu guards once the call returns.
 func (r *ConnectorRegistry) ListAvailableConnectors() []ConnectorMetadata {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

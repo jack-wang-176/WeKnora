@@ -108,11 +108,10 @@ func (r *DockerRuntime) Ping(ctx context.Context) error {
 
 // Start brings the plugin's container up and returns its dial address.
 //
-// It is idempotent by construction: the container name comes from the plugin id
-// alone, so a re-entry after a crash finds the previous container rather than
-// creating a second one. A container that is not running, or that runs a
-// different image than the spec asks for, is removed and rebuilt — that single
-// rule covers both crash recovery and upgrade.
+// Idempotent by construction: the container name comes from the plugin id, so a
+// re-entry finds the previous container instead of making a second one. One that
+// is not running, or runs a different image than the spec, is rebuilt — which
+// covers crash recovery and upgrade with one rule.
 func (r *DockerRuntime) Start(ctx context.Context, spec Spec) (Instance, error) {
 	if err := spec.Validate(); err != nil {
 		return Instance{}, err
@@ -168,12 +167,9 @@ func (r *DockerRuntime) Start(ctx context.Context, spec Spec) (Instance, error) 
 	return started, nil
 }
 
-// Stop removes the plugin's container rather than merely stopping it: every
-// caller wants the name free for the next Start, and a stopped-but-present
-// container would make that Start fail on a name conflict.
-//
-// A container that is already gone is success — the postcondition is "no
-// container by this name", and it already holds.
+// Stop removes the container rather than merely stopping it: every caller wants
+// the name free for the next Start, and a stopped-but-present container would
+// make that Start fail on a name conflict. A container already gone is success.
 func (r *DockerRuntime) Stop(ctx context.Context, containerName string) error {
 	if strings.TrimSpace(containerName) == "" {
 		return fmt.Errorf("%w: empty container name", ErrInvalidSpec)
