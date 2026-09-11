@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package weknora.plugin.datasource.v1;
 
-option go_package = "github.com/Tencent/WeKnora/proto/plugin/datasource/v1;datasourcev1";
+option go_package = "github.com/Tencent/WeKnora/docreader/proto/plugin/datasource;datasourcev1";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/struct.proto";

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/Tencent/WeKnora/internal/datasource"
+	dsplugin "github.com/Tencent/WeKnora/internal/datasource/plugin"
+	"github.com/Tencent/WeKnora/internal/extension"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/tracing/langfuse"
 	"github.com/Tencent/WeKnora/internal/types"
@@ -34,6 +36,9 @@ type DataSourceService struct {
 	tenantRepo        interfaces.TenantRepository
 	tagService        interfaces.KnowledgeTagService
 	audit             interfaces.AuditLogService
+	// host is consulted only when the registry has no such connector, so a
+	// deployment with no plugins takes exactly the path it took before.
+	host extension.Host
 }
 
 // NewDataSourceService creates a new data source service
@@ -48,6 +53,7 @@ func NewDataSourceService(
 	tenantRepo interfaces.TenantRepository,
 	tagService interfaces.KnowledgeTagService,
 	audit interfaces.AuditLogService,
+	host extension.Host,
 ) interfaces.DataSourceService {
 	return &DataSourceService{
 		dsRepo:            dsRepo,
@@ -60,7 +66,32 @@ func NewDataSourceService(
 		tenantRepo:        tenantRepo,
 		tagService:        tagService,
 		audit:             audit,
+		host:              host,
 	}
+}
+
+// resolveConnector returns the builtin connector for connectorType, falling
+// back to a plugin-backed one when no builtin claims that type.
+//
+// Plugins are never registered into the builtin registry: it refuses duplicates
+// and has no unregister, so an install would be irreversible and a reinstall
+// impossible. Resolving here instead keeps installs reversible and makes the
+// connector visible to the tenant that owns it only.
+func (s *DataSourceService) resolveConnector(
+	ctx context.Context, connectorType string,
+) (datasource.Connector, error) {
+	connector, err := s.resolveConnector(ctx, connectorType)
+	if err == nil || !errors.Is(err, datasource.ErrConnectorNotFound) {
+		return connector, err
+	}
+	if _, ok := VisiblePlugin(ctx, s.host, extension.KindDatasource, connectorType); !ok {
+		return nil, err
+	}
+	ch, openErr := s.host.Open(ctx, connectorType)
+	if openErr != nil {
+		return nil, openErr
+	}
+	return dsplugin.New(connectorType, ch), nil
 }
 
 // CreateDataSource creates a new data source configuration
@@ -79,7 +110,7 @@ func (s *DataSourceService) CreateDataSource(ctx context.Context, ds *types.Data
 	}
 
 	// Validate connector type
-	_, err = s.connectorRegistry.Get(ds.Type)
+	_, err = s.resolveConnector(ctx, ds.Type)
 	if err != nil {
 		return nil, err
 	}
@@ -355,7 +386,7 @@ func (s *DataSourceService) ValidateConnection(ctx context.Context, dsID string)
 	}
 
 	// Get connector
-	connector, err := s.connectorRegistry.Get(ds.Type)
+	connector, err := s.resolveConnector(ctx, ds.Type)
 	if err != nil {
 		return err
 	}
@@ -397,7 +428,7 @@ func (s *DataSourceService) ListAvailableResources(
 	}
 
 	// Get connector
-	connector, err := s.connectorRegistry.Get(ds.Type)
+	connector, err := s.resolveConnector(ctx, ds.Type)
 	if err != nil {
 		return nil, err
 	}
@@ -432,7 +463,7 @@ func (s *DataSourceService) ResolveResourceAncestors(
 		return nil, err
 	}
 
-	connector, err := s.connectorRegistry.Get(ds.Type)
+	connector, err := s.resolveConnector(ctx, ds.Type)
 	if err != nil {
 		return nil, err
 	}
@@ -630,7 +661,7 @@ func (s *DataSourceService) ProcessSync(ctx context.Context, task *asynq.Task) e
 	wasPaused := ds.Status == types.DataSourceStatusPaused
 
 	// Get connector
-	connector, err := s.connectorRegistry.Get(ds.Type)
+	connector, err := s.resolveConnector(ctx, ds.Type)
 	if err != nil {
 		logger.Errorf(ctx, "connector not found: type=%s", ds.Type)
 		syncLog.Status = types.SyncLogStatusFailed
@@ -1194,7 +1225,7 @@ func allFetchedItemsFailedError(result *types.SyncResult) error {
 
 // ValidateCredentials tests connectivity using raw credentials without persisting anything.
 func (s *DataSourceService) ValidateCredentials(ctx context.Context, connectorType string, credentials map[string]interface{}) error {
-	connector, err := s.connectorRegistry.Get(connectorType)
+	connector, err := s.resolveConnector(ctx, connectorType)
 	if err != nil {
 		return err
 	}
@@ -1212,7 +1243,7 @@ func (s *DataSourceService) ValidateCredentials(ctx context.Context, connectorTy
 // Helper functions
 
 func (s *DataSourceService) validateDataSourceConfig(ctx context.Context, ds *types.DataSource) error {
-	connector, err := s.connectorRegistry.Get(ds.Type)
+	connector, err := s.resolveConnector(ctx, ds.Type)
 	if err != nil {
 		return err
 	}
