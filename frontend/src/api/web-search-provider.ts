@@ -1,11 +1,19 @@
 import { get, post, put, del } from '@/utils/request'
 
+// Builtin provider ids, listed for autocompletion only. A plugin provider is
+// identified by its scoped plugin id, so the field itself must stay open.
+export type BuiltinWebSearchProvider =
+  | 'bing' | 'google' | 'duckduckgo' | 'tavily' | 'ollama' | 'baidu'
+  | 'searxng' | 'keenable' | 'zhipu' | 'metaso' | 'exa'
+
+export type WebSearchProviderType = BuiltinWebSearchProvider | (string & {})
+
 // WebSearchProviderEntity represents a configured web search provider instance
 export interface WebSearchProviderEntity {
   id?: string
   tenant_id?: number
   name: string
-  provider: 'bing' | 'google' | 'duckduckgo' | 'tavily' | 'ollama' | 'baidu' | 'searxng' | 'keenable' | 'zhipu' | 'metaso' | 'exa'
+  provider: WebSearchProviderType
   description?: string
   parameters: {
     // api_key is never returned by the server in this shape; it lives behind
