@@ -28,6 +28,7 @@ type Host interface {
 	Reload(ctx context.Context) (ReloadResult, error)
 	CloseSingle(ctx context.Context, id string) error
 	Reconnect(ctx context.Context, id string, addr string) (Status, error)
+	ListForTenant(kind Kind, tenantID string) []*Manifest
 }
 
 type Status struct {
