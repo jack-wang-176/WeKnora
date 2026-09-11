@@ -202,21 +202,6 @@ func parseManifestFile(content string, hostVersion string, reserved map[string]s
 	return &m, nil
 }
 
-func (m *Manifest) checkExecInsideDir() error {
-	if m.Builtin {
-		return nil
-	}
-	if filepath.IsAbs(m.Runtime.Exec) {
-		return fmt.Errorf("%s: runtime.exec must be revalant path,now receive absolute path %q", m.Dir, m.Runtime.Exec)
-	}
-	full := filepath.Join(m.Dir, m.Runtime.Exec)
-	rel, err := filepath.Rel(m.Dir, full)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return fmt.Errorf("%s: runtime.exec %q jump out of plugin file", m.Dir, m.Runtime.Exec)
-	}
-	return nil
-}
-
 func hostCompatible(constraint, hostVersion string) bool {
 	if strings.TrimSpace(constraint) == "" {
 		return true

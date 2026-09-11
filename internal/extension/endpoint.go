@@ -111,12 +111,11 @@ func (m *Manifest) Validate(hostVersion string, reserved map[string]struct{}, bu
 
 	switch m.Runtime.Transport {
 	case TransportSubprocessGRPC:
-		if m.Runtime.Exec == "" {
-			return fmt.Errorf("%s: subprocess transport must provide runtime.exec", where)
-		}
-		if err := m.checkExecInsideDir(); err != nil {
-			return err
-		}
+		// Refused at the manifest rather than at Open: this host never spawns
+		// processes, so such a plugin would load and then fail every call.
+		// Run the process yourself and publish its address as remote-grpc.
+		return fmt.Errorf("%s: runtime.transport %q is not served; run the plugin and declare %q instead: %w",
+			where, TransportSubprocessGRPC, TransportRemoteGRPC, ErrInvalidManifest)
 	case TransportRemoteGRPC, TransportRemoteHTTP:
 		if m.Runtime.Endpoint == "" && !builtin {
 			return fmt.Errorf("%s: remote transport must provide runtime.endpoint", where)
