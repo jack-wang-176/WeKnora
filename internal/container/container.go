@@ -143,7 +143,6 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	logger.Debugf(ctx, "[Container] Initializing DuckDB...")
 	must(container.Provide(NewDuckDB))
 	logger.Debugf(ctx, "[Container] DuckDB registered")
-	must(container.Invoke(registerExtensionCleanup))
 
 	// Data repositories layer
 	logger.Debugf(ctx, "[Container] Registering repositories...")
@@ -416,6 +415,9 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	// Plugin replay runs here rather than inside the host provider: it needs a
 	// live database, and a constructor is the wrong place to discover that the
 	// database is not ready.
+	// Cleanup is registered here, not next to the provider: Invoke is eager and
+	// the host needs the plugin repository, which is provided further down.
+	must(container.Invoke(registerExtensionCleanup))
 	must(container.Invoke(replayPlugins))
 	must(container.Invoke(startTenantPluginReaper))
 	logger.Debugf(ctx, "[Container] Extension plugins replayed")
