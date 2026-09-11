@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/Tencent/WeKnora/internal/datasource"
+	"github.com/Tencent/WeKnora/internal/extension"
 	"github.com/Tencent/WeKnora/internal/handler/dto"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
@@ -17,11 +18,12 @@ type DataSourceHandler struct {
 	service   interfaces.DataSourceService
 	kbService interfaces.KnowledgeBaseService
 	// registry is the live connector registry, held directly rather than
-	// reached through a package-level table. The handler is also where
-	// plugin-provided datasources will be merged with the built-in ones: the
-	// merge cannot live in internal/datasource, because that package would then
-	// have to import internal/extension, which imports it back.
+	// reached through a package-level table.
 	registry *datasource.ConnectorRegistry
+	// host supplies the plugin connectors merged into the type list here,
+	// because internal/datasource cannot import internal/extension without a
+	// cycle.
+	host extension.Host
 }
 
 // NewDataSourceHandler creates a new data source handler
@@ -29,11 +31,13 @@ func NewDataSourceHandler(
 	service interfaces.DataSourceService,
 	kbService interfaces.KnowledgeBaseService,
 	registry *datasource.ConnectorRegistry,
+	host extension.Host,
 ) *DataSourceHandler {
 	return &DataSourceHandler{
 		service:   service,
 		kbService: kbService,
 		registry:  registry,
+		host:      host,
 	}
 }
 
@@ -615,6 +619,5 @@ func (h *DataSourceHandler) GetSyncLog(c *gin.Context) {
 // @Success 200 {object} []datasource.ConnectorMetadata
 // @Router /datasource/types [get]
 func (h *DataSourceHandler) GetAvailableConnectors(c *gin.Context) {
-	connectors := h.registry.ListAvailableConnectors()
-	c.JSON(http.StatusOK, connectors)
+	c.JSON(http.StatusOK, mergeConnectorMetadata(c, h.registry, h.host))
 }
