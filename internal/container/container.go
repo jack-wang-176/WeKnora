@@ -1553,6 +1553,16 @@ func registerLangfuseCleanup(mgr *langfuse.Manager, cleaner interfaces.ResourceC
 // is the whole point of the endpoint — a server that refuses to boot because a
 // converter is down cannot be used to fix the converter's address.
 func initDocReaderClient(host extension.Host) (interfaces.DocumentReader, error) {
+	reader, err := initBuiltinDocReader(host)
+	if err != nil {
+		return nil, err
+	}
+	// Wrapped, not replaced: the builtin reader stays the fallback and keeps
+	// owning the /system/docreader endpoints.
+	return service.NewPluginDocumentReader(reader, host), nil
+}
+
+func initBuiltinDocReader(host extension.Host) (interfaces.DocumentReader, error) {
 	ctx := context.Background()
 
 	m, ok := host.Get(extension.DocreaderExtesnionID)
