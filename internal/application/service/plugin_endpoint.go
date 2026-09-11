@@ -18,8 +18,8 @@ import (
 // two paths cannot produce manifests that differ in a field.
 
 // endpointTransports are the transports this channel can install. The table's
-// CHECK constraint also permits subprocess-grpc: that needs an executable on
-// the host's disk, which an API request cannot deliver.
+// CHECK constraint also permits subprocess-grpc, which the manifest validator
+// now refuses outright: this host never spawns processes.
 var endpointTransports = map[string]struct{}{
 	string(extension.TransportRemoteGRPC): {},
 	string(extension.TransportRemoteHTTP): {},
