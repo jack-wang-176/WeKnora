@@ -24,7 +24,7 @@ func (s *TenantSkillService) ListSkillFiles(
 	if err != nil {
 		return nil, err
 	}
-	return listBundleZipFiles(archive)
+	return listSkillZipFiles(archive)
 }
 
 // ReadSkillFile returns one file from the stored archive. Binary files are
@@ -41,9 +41,9 @@ func (s *TenantSkillService) ReadSkillFile(
 	if err != nil {
 		return nil, err
 	}
-	body, err := readBundleZipFile(archive, clean)
+	body, err := readSkillZipFile(archive, clean)
 	if err != nil {
-		if errors.Is(err, errBundleFileMissing) {
+		if errors.Is(err, errSkillFileMissing) {
 			return nil, apperrors.NewNotFoundError("skill file not found")
 		}
 		return nil, err

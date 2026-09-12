@@ -38,6 +38,14 @@ func (runtimeTestSettings) GetBool(_ context.Context, _, _ string, def bool) boo
 func (runtimeTestSettings) GetStringList(_ context.Context, _, _ string, def []string) []string {
 	return def
 }
+
+func (runtimeTestSettings) PluginSSRFWhitelistEntries(context.Context) []string { return nil }
+func (runtimeTestSettings) AddPluginSSRFWhitelistEntries(context.Context, ...string) error {
+	return nil
+}
+func (runtimeTestSettings) RemovePluginSSRFWhitelistEntries(context.Context, ...string) error {
+	return nil
+}
 func (runtimeTestSettings) List(context.Context) ([]*types.SystemSetting, error) { return nil, nil }
 func (runtimeTestSettings) Get(context.Context, string) (*types.SystemSetting, error) {
 	return nil, nil

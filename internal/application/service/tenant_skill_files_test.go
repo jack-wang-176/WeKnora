@@ -146,13 +146,13 @@ func TestReadSkillFileReturnsTextContent(t *testing.T) {
 	file, err := fx.svc.ReadSkillFile(context.Background(), 7, "cfg-1", "sk-1", "scripts/extract.py")
 	require.NoError(t, err)
 	require.Equal(t, "scripts/extract.py", file.Path)
-	require.Equal(t, skillFileEncodingUTF8, file.Encoding)
+	require.Equal(t, bundleFileEncodingUTF8, file.Encoding)
 	require.Equal(t, "print('hi')\n", file.Content)
 	require.False(t, file.Binary)
 }
 
 func TestSkillBundleArchiveCacheKeepsOversizeAsSoleOccupant(t *testing.T) {
-	c := &skillBundleArchiveCache{slots: 4, maxBytes: 8}
+	c := &bundleArchiveCache{slots: 4, maxBytes: 8}
 	c.put("small", []byte("abcd"))
 	c.put("big", []byte("0123456789"))
 
@@ -162,7 +162,7 @@ func TestSkillBundleArchiveCacheKeepsOversizeAsSoleOccupant(t *testing.T) {
 }
 
 func TestSkillBundleArchiveCacheEvictsToStayUnderBudget(t *testing.T) {
-	c := &skillBundleArchiveCache{slots: 4, maxBytes: 8}
+	c := &bundleArchiveCache{slots: 4, maxBytes: 8}
 	c.put("a", []byte("aaaa"))
 	c.put("b", []byte("bbbb"))
 	c.put("c", []byte("cccc"))
@@ -173,7 +173,7 @@ func TestSkillBundleArchiveCacheEvictsToStayUnderBudget(t *testing.T) {
 }
 
 func TestSkillBundleArchiveCacheRespectsSlotCount(t *testing.T) {
-	c := &skillBundleArchiveCache{slots: 2, maxBytes: 100}
+	c := &bundleArchiveCache{slots: 2, maxBytes: 100}
 	c.put("a", []byte("a"))
 	c.put("b", []byte("b"))
 	c.put("c", []byte("c"))
@@ -283,7 +283,7 @@ func TestReadSkillFileInlinesASmallImage(t *testing.T) {
 
 	file, err := fx.svc.ReadSkillFile(context.Background(), 7, "cfg-1", "sk-1", "assets/a.png")
 	require.NoError(t, err)
-	require.Equal(t, skillFileEncodingBase64, file.Encoding)
+	require.Equal(t, bundleFileEncodingBase64, file.Encoding)
 	require.Equal(t, "image/png", file.MediaType)
 	decoded, err := base64.StdEncoding.DecodeString(file.Content)
 	require.NoError(t, err)
@@ -291,9 +291,9 @@ func TestReadSkillFileInlinesASmallImage(t *testing.T) {
 }
 
 func TestProjectSkillFileContentMarksBinaryWithoutInlining(t *testing.T) {
-	got := projectSkillFileContent("scripts/tool.bin", []byte{0x00, 0x01, 0xff})
+	got := projectBundleFileContent("scripts/tool.bin", []byte{0x00, 0x01, 0xff})
 	require.True(t, got.Binary)
-	require.Equal(t, skillFileEncodingBinary, got.Encoding)
+	require.Equal(t, bundleFileEncodingBinary, got.Encoding)
 	require.Empty(t, got.Content)
 }
 

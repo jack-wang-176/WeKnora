@@ -23,7 +23,9 @@ func TenantScopeFromContext(ctx context.Context) string {
 // not turned off, and either host-wide or its own. The owner check is here and
 // nowhere else — copied into each consumer it becomes a cross-tenant leak the
 // day one copy is wrong.
-func VisiblePlugin(ctx context.Context, host extension.Host, kind extension.Kind, id string) (*extension.Manifest, bool) {
+func VisiblePlugin(
+	ctx context.Context, host extension.Host, kind extension.Kind, id string,
+) (*extension.Manifest, bool) {
 	if host == nil || id == "" {
 		return nil, false
 	}

@@ -78,7 +78,7 @@ func NewDataSourceService(
 func (s *DataSourceService) resolveConnector(
 	ctx context.Context, connectorType string,
 ) (datasource.Connector, error) {
-	connector, err := s.resolveConnector(ctx, connectorType)
+	connector, err := s.connectorRegistry.Get(connectorType)
 	if err == nil || !errors.Is(err, datasource.ErrConnectorNotFound) {
 		return connector, err
 	}
@@ -1223,7 +1223,7 @@ func allFetchedItemsFailedError(result *types.SyncResult) error {
 
 // ValidateCredentials tests connectivity using raw credentials without persisting anything.
 func (s *DataSourceService) ValidateCredentials(ctx context.Context, connectorType string, credentials map[string]interface{}) error {
-	connector, err := s.resolveConnector(ctx, connectorType)
+	connector, err := s.connectorRegistry.Get(connectorType)
 	if err != nil {
 		return err
 	}

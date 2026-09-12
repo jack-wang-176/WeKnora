@@ -68,7 +68,9 @@ func mergeWebSearchProviderTypes(c *gin.Context, host extension.Host) []types.We
 // mergeConnectorMetadata appends one entry per datasource plugin after the
 // builtin connectors. Builtins win on a type clash, and plugin priorities are
 // offset past the builtins so a client that re-sorts still renders them last.
-func mergeConnectorMetadata(c *gin.Context, registry *datasource.ConnectorRegistry, host extension.Host) []datasource.ConnectorMetadata {
+func mergeConnectorMetadata(
+	c *gin.Context, registry *datasource.ConnectorRegistry, host extension.Host,
+) []datasource.ConnectorMetadata {
 	out := registry.ListAvailableConnectors()
 	seen := make(map[string]struct{}, len(out))
 	base := 0
