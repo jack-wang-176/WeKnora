@@ -873,6 +873,7 @@ onUnmounted(() => {
 /* 右侧内容区域 */
 .settings-content {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
   background-color: var(--td-bg-color-container);
 }
@@ -905,6 +906,16 @@ onUnmounted(() => {
 
 .section {
   animation: fadeIn 0.3s ease;
+}
+
+@media (max-width: 640px) {
+  .settings-overlay { padding: 8px; }
+  .settings-modal { max-height: calc(100dvh - 16px); }
+  .settings-container { flex-direction: column; }
+  .settings-sidebar { width: 100%; max-height: 180px; border-right: 0; border-bottom: 1px solid var(--td-component-stroke); }
+  .sidebar-header { padding-right: 52px; }
+  .settings-nav { overflow: auto; }
+  .content-wrapper, .content-wrapper--wide, .content-wrapper--full { padding: 20px 16px; }
 }
 
 @keyframes fadeIn {

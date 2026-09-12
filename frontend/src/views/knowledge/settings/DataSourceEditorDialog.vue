@@ -643,7 +643,7 @@ const serverConnectors = ref<ConnectorMeta[]>([])
 async function loadServerConnectors() {
   try {
     const res: any = await getConnectorTypes()
-    serverConnectors.value = Array.isArray(res?.data) ? res.data : (res?.data?.data || [])
+    serverConnectors.value = Array.isArray(res) ? res : []
   } catch {
     serverConnectors.value = []
   }

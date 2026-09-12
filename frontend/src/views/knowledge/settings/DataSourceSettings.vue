@@ -134,7 +134,9 @@ function syncModeLabel(mode: string) {
 }
 
 function connectorLabel(type: string) {
-  return t(`datasource.connector.${type}`) || type
+  const key = `datasource.connector.${type}`
+  const translated = t(key)
+  return translated !== key ? translated : type
 }
 
 function scheduleLabel(cron: string) {

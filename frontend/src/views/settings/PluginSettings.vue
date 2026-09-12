@@ -74,7 +74,10 @@
                 <span class="plugin-card__chip" :class="`plugin-card__chip--${item.status}`">
                   {{ statusLabel(item) }}
                 </span>
-                <span class="plugin-card__meta">{{ item.channel }} · {{ item.policy_class }}</span>
+                <span class="plugin-card__meta">{{ item.channel }} · {{ item.channel === 'endpoint' ? t('settings.plugins.externalPolicy') : item.policy_class }}</span>
+                <span class="plugin-card__meta" :class="{ 'plugin-card__error': item.state === 'not_serving' }">
+                  {{ t(`settings.plugins.health_${item.state || 'unknown'}`) }}
+                </span>
                 <span v-if="item.env_keys?.length" class="plugin-card__meta">
                   {{ t('settings.plugins.envKeys', { n: item.env_keys.length }) }}
                 </span>
@@ -85,7 +88,7 @@
       </div>
     </template>
 
-    <t-dialog v-model:visible="registerVisible" :header="t('settings.plugins.registerTitle')" :width="520"
+    <t-dialog v-model:visible="registerVisible" :header="t('settings.plugins.registerTitle')" width="min(520px, calc(100vw - 32px))"
       :confirm-btn="{ content: t('settings.plugins.submit'), loading: submitting }"
       :cancel-btn="t('common.cancel')" @confirm="submitRegister">
       <t-form label-align="top">
@@ -105,15 +108,10 @@
         <t-form-item :label="t('settings.plugins.endpoint')">
           <t-input v-model="registerForm.endpoint" placeholder="host:port" />
         </t-form-item>
-        <t-form-item :label="t('settings.plugins.policy')">
-          <t-select v-model="registerForm.policy_class">
-            <t-option v-for="p in PLUGIN_POLICIES" :key="p" :value="p" :label="p" />
-          </t-select>
-        </t-form-item>
       </t-form>
     </t-dialog>
 
-    <t-dialog v-model:visible="installVisible" :header="t('settings.plugins.installTitle')" :width="560"
+    <t-dialog v-model:visible="installVisible" :header="t('settings.plugins.installTitle')" width="min(560px, calc(100vw - 32px))"
       :confirm-btn="{ content: t('settings.plugins.submit'), loading: submitting }"
       :cancel-btn="t('common.cancel')" @confirm="submitInstall">
       <t-form label-align="top">
@@ -131,6 +129,11 @@
         <t-form-item :label="t('settings.plugins.sourceRef')">
           <t-input v-model="installForm.source_ref" />
         </t-form-item>
+        <t-form-item :label="t('settings.plugins.policy')">
+          <t-select v-model="installForm.policy_class">
+            <t-option v-for="policy in PLUGIN_POLICIES" :key="policy" :value="policy" :label="policy" />
+          </t-select>
+        </t-form-item>
         <t-form-item :label="t('settings.plugins.manifest')">
           <t-textarea v-model="installForm.manifest" :autosize="{ minRows: 6, maxRows: 14 }"
             :placeholder="t('settings.plugins.manifestTip')" />
@@ -138,13 +141,13 @@
       </t-form>
     </t-dialog>
 
-    <t-dialog v-model:visible="reconnectVisible" :header="t('settings.plugins.reconnect')" :width="460"
+    <t-dialog v-model:visible="reconnectVisible" :header="t('settings.plugins.reconnect')" width="min(460px, calc(100vw - 32px))"
       :confirm-btn="{ content: t('settings.plugins.submit'), loading: submitting }"
       :cancel-btn="t('common.cancel')" @confirm="submitReconnect">
       <t-input v-model="reconnectEndpoint" placeholder="host:port" />
     </t-dialog>
 
-    <t-dialog v-model:visible="envsVisible" :header="t('settings.plugins.envsTitle')" :width="520"
+    <t-dialog v-model:visible="envsVisible" :header="t('settings.plugins.envsTitle')" width="min(520px, calc(100vw - 32px))"
       :confirm-btn="{ content: t('settings.plugins.submit'), loading: submitting }"
       :cancel-btn="t('common.cancel')" @confirm="submitEnvs">
       <p class="plugin-settings__hint">{{ t('settings.plugins.envsTip') }}</p>
@@ -172,6 +175,7 @@ import {
   PLUGIN_POLICIES,
   PLUGIN_TRANSPORTS,
   installPlugin,
+  getPlugin,
   listPlugins,
   pluginInstallEventsUrl,
   reconnectPlugin,
@@ -192,23 +196,23 @@ import { getApiBaseUrl } from '@/utils/api-base'
 const { t } = useI18n()
 const authStore = useAuthStore()
 
-const SOURCE_TYPES = ['image', 'vcs', 'archive'] as const
+const SOURCE_TYPES = ['image'] as const
 
 const scope = ref<PluginScope>('tenant')
 const plugins = ref<PluginEntity[]>([])
 const loading = ref(false)
 const busyId = ref('')
 const submitting = ref(false)
+let loadGeneration = 0
 
 // The process scope is the whole deployment's plugin set; only a system admin
 // may see it, and the backend enforces the same bar on /admin/plugins.
-const canUseProcessScope = computed(() => authStore.canAccessAllTenants)
+const canUseProcessScope = computed(() => authStore.isSystemAdmin)
 
 const KIND_ICONS: Record<string, string> = {
   websearch: 'search',
   docparser: 'file-search',
   datasource: 'data-base',
-  docreader: 'file',
 }
 
 function kindIcon(kind: string): string {
@@ -223,7 +227,7 @@ function kindLabel(kind: PluginKind): string {
 }
 
 function statusLabel(item: PluginEntity): string {
-  const event = progressById.value[item.id]
+  const event = progressById.value[item.plugin_id]
   if (item.status === 'installing' && event && !event.done) {
     return `${t('settings.plugins.status_installing')} ${Math.round(event.percent)}%`
   }
@@ -233,16 +237,33 @@ function statusLabel(item: PluginEntity): string {
 }
 
 async function load() {
+  const requestedScope = scope.value
+  const generation = ++loadGeneration
   loading.value = true
   try {
-    const res = await listPlugins(scope.value)
+    const res = await listPlugins(requestedScope)
+    if (generation !== loadGeneration) return
     plugins.value = Array.isArray(res?.data) ? res.data : []
     syncStreams()
-  } catch (e: any) {
-    plugins.value = []
-    MessagePlugin.error(e?.message || t('settings.plugins.loadFailed'))
-  } finally {
     loading.value = false
+    const healthTargets = [...plugins.value]
+    for (let offset = 0; offset < healthTargets.length && generation === loadGeneration; offset += 4) {
+      await Promise.all(healthTargets.slice(offset, offset + 4).map(async item => {
+        try {
+          const detail = await getPlugin(requestedScope, item.plugin_id)
+          if (generation === loadGeneration) item.state = detail.data.state || 'unknown'
+        } catch {
+          if (generation === loadGeneration) item.state = 'unknown'
+        }
+      }))
+    }
+  } catch (e: any) {
+    if (generation === loadGeneration) {
+      plugins.value = []
+      MessagePlugin.error(e?.message || t('settings.plugins.loadFailed'))
+    }
+  } finally {
+    if (generation === loadGeneration) loading.value = false
   }
 }
 
@@ -250,7 +271,6 @@ watch(scope, () => {
   stopAllStreams()
   load()
 })
-load()
 
 /* ---------- install progress ---------- */
 
@@ -267,7 +287,10 @@ function stopAllStreams() {
   progressById.value = {}
 }
 
-onBeforeUnmount(stopAllStreams)
+onBeforeUnmount(() => {
+  loadGeneration++
+  stopAllStreams()
+})
 
 // One stream per installing plugin. The server replays the buffered log on
 // connect, so a page opened mid-install still shows the whole run.
@@ -311,7 +334,7 @@ function follow(id: string) {
 }
 
 function syncStreams() {
-  const wanted = new Set(plugins.value.filter(p => p.status === 'installing').map(p => p.id))
+  const wanted = new Set(plugins.value.filter(p => p.status === 'installing').map(p => p.plugin_id))
   for (const id of wanted) follow(id)
   for (const id of [...abortById.keys()]) if (!wanted.has(id)) stopStream(id)
 }
@@ -331,7 +354,7 @@ async function runOn(item: PluginEntity, fn: () => Promise<unknown>) {
 }
 
 function toggle(item: PluginEntity, enabled: boolean) {
-  return runOn(item, () => setPluginEnabled(scope.value, item.id, enabled))
+  return runOn(item, () => setPluginEnabled(scope.value, item.plugin_id, enabled))
 }
 
 function askUninstall(item: PluginEntity) {
@@ -342,7 +365,7 @@ function askUninstall(item: PluginEntity) {
     confirmBtn: { content: t('settings.plugins.uninstall'), theme: 'danger' },
     onConfirm: async () => {
       dialog.hide()
-      await runOn(item, () => uninstallPlugin(scope.value, item.id))
+      await runOn(item, () => uninstallPlugin(scope.value, item.plugin_id))
     },
   })
 }
@@ -353,7 +376,7 @@ const registerForm = ref({
   kind: 'websearch' as PluginKind,
   transport: PLUGIN_TRANSPORTS[0],
   endpoint: '',
-  policy_class: PLUGIN_POLICIES[0],
+  policy_class: 'open' as const,
 })
 
 function openRegister() {
@@ -362,7 +385,7 @@ function openRegister() {
     kind: 'websearch',
     transport: PLUGIN_TRANSPORTS[0],
     endpoint: '',
-    policy_class: PLUGIN_POLICIES[0],
+    policy_class: 'open',
   }
   registerVisible.value = true
 }
@@ -397,11 +420,12 @@ const installForm = ref({
   source_type: 'image' as (typeof SOURCE_TYPES)[number],
   source_url: '',
   source_ref: '',
+  policy_class: PLUGIN_POLICIES[0],
   manifest: '',
 })
 
 function openInstall() {
-  installForm.value = { plugin_id: '', source_type: 'image', source_url: '', source_ref: '', manifest: '' }
+  installForm.value = { plugin_id: '', source_type: 'image', source_url: '', source_ref: '', policy_class: PLUGIN_POLICIES[0], manifest: '' }
   installVisible.value = true
 }
 
@@ -419,11 +443,12 @@ async function submitInstall() {
       source_url: form.source_url.trim(),
       source_ref: form.source_ref.trim() || undefined,
       manifest: form.manifest,
+      policy_class: form.policy_class,
     })
     installVisible.value = false
     // The row exists before the image does; follow it so the card shows the
     // build rather than a silent "installing".
-    if (res?.data?.id) follow(res.data.id)
+    if (res?.data?.plugin_id) follow(res.data.plugin_id)
     await load()
   } catch (e: any) {
     MessagePlugin.error(e?.message || t('settings.plugins.actionFailed'))
@@ -447,7 +472,7 @@ async function submitReconnect() {
   if (!item || !reconnectEndpoint.value.trim()) return
   submitting.value = true
   try {
-    await reconnectPlugin(scope.value, item.id, reconnectEndpoint.value.trim())
+    await reconnectPlugin(scope.value, item.plugin_id, reconnectEndpoint.value.trim())
     reconnectVisible.value = false
     await load()
   } catch (e: any) {
@@ -475,11 +500,15 @@ async function submitEnvs() {
   const envs: Record<string, string> = {}
   for (const row of envRows.value) {
     const key = row.key.trim()
+    if (key && !row.value) {
+      MessagePlugin.warning(t('settings.plugins.envValueRequired'))
+      return
+    }
     if (key) envs[key] = row.value
   }
   submitting.value = true
   try {
-    await setPluginEnvs(scope.value, item.id, envs)
+    await setPluginEnvs(scope.value, item.plugin_id, envs)
     envsVisible.value = false
     await load()
   } catch (e: any) {
@@ -488,6 +517,7 @@ async function submitEnvs() {
     submitting.value = false
   }
 }
+load()
 </script>
 
 <style lang="less" scoped>
@@ -524,6 +554,7 @@ async function submitEnvs() {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
   margin-bottom: 16px;
 
@@ -559,7 +590,7 @@ async function submitEnvs() {
 
 .plugin-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
   gap: 10px;
   align-items: stretch;
 }
@@ -570,7 +601,7 @@ async function submitEnvs() {
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--td-component-stroke);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--td-bg-color-container);
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
   min-width: 0;
@@ -618,6 +649,7 @@ async function submitEnvs() {
   gap: 8px;
   min-width: 0;
   min-height: 28px;
+  flex-wrap: wrap;
 }
 
 .plugin-card__heading {
@@ -626,6 +658,8 @@ async function submitEnvs() {
   display: flex;
   align-items: baseline;
   gap: 6px;
+  flex-wrap: wrap;
+  flex-basis: 200px;
 }
 
 .plugin-card__title {

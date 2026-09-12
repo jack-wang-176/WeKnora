@@ -4,14 +4,14 @@ import { del, get, post, put } from '@/utils/request'
 // different RBAC, and a body-level scope would let one key reach the other.
 export type PluginScope = 'tenant' | 'process'
 
-export const PLUGIN_KINDS = ['websearch', 'docparser', 'datasource', 'docreader'] as const
+export const PLUGIN_KINDS = ['websearch', 'docparser', 'datasource'] as const
 export type PluginKind = (typeof PLUGIN_KINDS)[number] | (string & {})
 
 // subprocess-grpc is refused by the manifest validator, so it is not offered.
 export const PLUGIN_TRANSPORTS = ['remote-grpc', 'remote-http'] as const
 export type PluginTransport = (typeof PLUGIN_TRANSPORTS)[number]
 
-export const PLUGIN_POLICIES = ['offline', 'scoped', 'open'] as const
+export const PLUGIN_POLICIES = ['offline', 'open'] as const
 export type PluginPolicy = (typeof PLUGIN_POLICIES)[number]
 
 // Envs are reported as key names only — the values are credentials.
@@ -43,6 +43,7 @@ export interface PluginRegisterRequest {
   policy_class?: PluginPolicy
   envs?: Record<string, string>
   permissions?: Record<string, any>
+  manifest?: string
 }
 
 export interface PluginInstallRequest {
