@@ -1,0 +1,15 @@
+version: 1
+student:
+  name: "王宇新"
+  github_id: "jack-wang-176"
+topic:
+  id: "课题一"
+  title: "扩展能力插件化框架"
+result:
+  type: code
+  url: "https://github.com/jack-wang-176/WeKnora/tree/rhino-2026-final-topic-1"
+repository:
+  url: "git@github.com:jack-wang-176/WeKnora.git"
+  branch: "main"
+  commit: "4bfb85d3a252e49a87950b44cdac9679b3513a45"
+  tag: "rhino-2026-final-topic-1"
