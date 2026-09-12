@@ -91,6 +91,10 @@ func (s *TenantPluginService) clock() func() time.Time {
 	return time.Now
 }
 
+func (s *TenantPluginService) timestamp() time.Time {
+	return s.clock()().UTC().Truncate(time.Microsecond)
+}
+
 // withInstallLock makes "read the row, decide, write the row" atomic across
 // replicas. It deliberately does not cover the whole install: a lease renewed
 // across a multi-minute image pull buys nothing that the installing status and
@@ -192,7 +196,7 @@ func (s *TenantPluginService) beat(ctx context.Context, row *types.TenantPlugin,
 	if !ok {
 		return
 	}
-	at := s.clock()().UTC()
+	at := s.timestamp()
 	current.InstallingSince = &at
 	if err := s.plugins.UpdatePlugin(ctx, current); err != nil {
 		logger.Warnf(ctx, "[PluginBundle] %s: heartbeat failed: %v", row.PluginID, err)

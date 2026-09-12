@@ -101,7 +101,7 @@ func (s *TenantPluginService) reapStuckRuns(ctx context.Context) {
 		case types.PluginStatusRemoving:
 			// A teardown that stopped beating. Re-stamp first so the retry owns
 			// the row, then run the same teardown again — it is idempotent.
-			now := s.clock()().UTC()
+			now := s.timestamp()
 			row.InstallingSince = &now
 			if err := s.plugins.UpdatePlugin(ctx, row); err != nil {
 				logger.Warnf(ctx, "[PluginReaper] %s: re-claim for removal failed: %v", row.PluginID, err)

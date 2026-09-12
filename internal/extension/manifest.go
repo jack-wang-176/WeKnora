@@ -91,11 +91,12 @@ type ConfigField struct {
 }
 
 type Runtime struct {
-	Transport Transport         `yaml:"transport"`
-	Exec      string            `yaml:"exec"`
-	Args      []string          `yaml:"args"`
-	Endpoint  string            `yaml:"endpoint"`
-	Env       map[string]string `yaml:"env"`
+	Transport      Transport         `yaml:"transport"`
+	Exec           string            `yaml:"exec"`
+	Args           []string          `yaml:"args"`
+	Endpoint       string            `yaml:"endpoint"`
+	Env            map[string]string `yaml:"env"`
+	ManagedOffline bool              `yaml:"-"`
 }
 
 type Compatibility struct {
@@ -126,7 +127,7 @@ func (m *Manifest) IsRequired() bool {
 	return m.Criticality != CriticalityOptional
 }
 
-func (p *Permissions) validate(where string, t Transport) error {
+func (p *Permissions) validate(where string, t Transport, managedOffline bool) error {
 	switch outbound := strings.TrimSpace(p.Network.Outbound); outbound {
 	case "", NetworkAny:
 		if len(p.Network.Allow) > 0 {
@@ -149,7 +150,7 @@ func (p *Permissions) validate(where string, t Transport) error {
 		if len(p.Filesystem.Read) > 0 || len(p.Filesystem.Write) > 0 {
 			return fmt.Errorf("%s: filesystem permissions cannot apply to %s: %w", where, t, ErrUnenforceable)
 		}
-		if p.Network.Outbound == NetworkNone {
+		if p.Network.Outbound == NetworkNone && !managedOffline {
 			return fmt.Errorf("%s: outbound=none cannot apply to %s: %w", where, t, ErrUnenforceable)
 		}
 	}

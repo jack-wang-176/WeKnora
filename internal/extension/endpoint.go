@@ -124,5 +124,5 @@ func (m *Manifest) Validate(hostVersion string, reserved map[string]struct{}, bu
 		return fmt.Errorf("%s: runtime.transport %q 未知", where, m.Runtime.Transport)
 	}
 
-	return m.Permissions.validate(where, m.Runtime.Transport)
+	return m.Permissions.validate(where, m.Runtime.Transport, m.Runtime.ManagedOffline)
 }

@@ -67,7 +67,7 @@ func (h *PluginHandler) Install(c *gin.Context) {
 		respondPluginServiceError(c, err)
 		return
 	}
-	c.JSON(http.StatusAccepted, toPluginResponse(row))
+	c.JSON(http.StatusAccepted, gin.H{"success": true, "data": toPluginResponse(row)})
 }
 
 // bundleRow reports whether :id names a bundle plugin, so the lifecycle routes
@@ -111,7 +111,7 @@ func (h *PluginHandler) setBundleEnabled(c *gin.Context, enabled bool) {
 		respondPluginServiceError(c, err)
 		return
 	}
-	c.JSON(code, toPluginResponse(row))
+	c.JSON(code, gin.H{"success": true, "data": toPluginResponse(row)})
 }
 
 type pluginInstallEvent struct {

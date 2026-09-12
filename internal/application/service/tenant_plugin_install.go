@@ -71,7 +71,9 @@ func parsePluginManifest(raw string) (*extension.Manifest, error) {
 		return nil, fmt.Errorf("%w: manifest is required", ErrPluginInvalid)
 	}
 	var m extension.Manifest
-	if err := yaml.Unmarshal([]byte(raw), &m); err != nil {
+	decoder := yaml.NewDecoder(strings.NewReader(raw))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&m); err != nil {
 		return nil, fmt.Errorf("%w: manifest: %v", ErrPluginInvalid, err)
 	}
 	if _, ok := pluginKinds[string(m.Extension.Kind)]; !ok {
@@ -111,11 +113,30 @@ func newBundlePluginRow(
 ) (*types.TenantPlugin, error) {
 	policy := strings.TrimSpace(req.PolicyClass)
 	if policy == "" {
-		policy = types.PluginPolicyScoped
+		policy = types.PluginPolicyOffline
 	}
 	if _, ok := pluginPolicyClasses[policy]; !ok {
 		return nil, fmt.Errorf("%w: policy_class %q is not one of offline/scoped/open",
 			ErrPluginInvalid, req.PolicyClass)
+	}
+	if policy == types.PluginPolicyScoped {
+		return nil, fmt.Errorf("%w: scoped network policy requires an egress proxy", ErrPluginInvalid)
+	}
+	if m.Metadata.ID != base {
+		return nil, fmt.Errorf("%w: manifest id must match plugin_id", ErrPluginInvalid)
+	}
+	if m.Runtime.Transport != "" && string(m.Runtime.Transport) != pluginBundleTransport {
+		return nil, fmt.Errorf("%w: managed bundles require remote-grpc", ErrPluginInvalid)
+	}
+	if m.Permissions.Network.Outbound == extension.NetworkNone && policy != types.PluginPolicyOffline {
+		return nil, fmt.Errorf("%w: outbound=none requires the offline runtime policy", ErrPluginInvalid)
+	}
+	preflight := *m
+	preflight.Metadata.ID = scopedPluginID(base, req.TenantID)
+	preflight.Runtime = extension.Runtime{Transport: extension.TransportRemoteGRPC, Endpoint: "pending:50051", ManagedOffline: policy == types.PluginPolicyOffline}
+	preflight.Compatibility.Host = ""
+	if err := preflight.Validate("", nil, false); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrPluginInvalid, err)
 	}
 	sourceURL := src.URL
 	imageRef := src.URL
@@ -136,6 +157,7 @@ func newBundlePluginRow(
 		Enabled:         true,
 		Envs:            widenStringMap(req.Envs),
 		Permissions:     permissionsMap(m.Permissions),
+		Manifest:        req.Manifest,
 	}
 	if src.Ref != "" {
 		ref := src.Ref
@@ -172,7 +194,7 @@ func (s *TenantPluginService) InstallPlugin(
 	if err != nil {
 		return nil, err
 	}
-	now := s.clock()().UTC()
+	now := s.timestamp()
 	fresh, err := newBundlePluginRow(req, base, src, m, now)
 	if err != nil {
 		return nil, err
@@ -223,11 +245,18 @@ func (s *TenantPluginService) InstallPlugin(
 		existing.ImageRef = fresh.ImageRef
 		existing.Envs = fresh.Envs
 		existing.Permissions = fresh.Permissions
+		existing.Manifest = fresh.Manifest
 		existing.Status = types.PluginStatusInstalling
 		existing.InstallingSince = &now
 		existing.Enabled = true
 		existing.Error = nil
 		if err := s.plugins.UpdatePlugin(ctx, existing); err != nil {
+			return err
+		}
+		if err := s.plugins.UpdatePluginEnvs(ctx, existing.ID, req.Envs); err != nil {
+			return err
+		}
+		if err := s.plugins.UpdatePluginPermissions(ctx, existing.ID, map[string]any(fresh.Permissions)); err != nil {
 			return err
 		}
 		row = existing
@@ -238,14 +267,14 @@ func (s *TenantPluginService) InstallPlugin(
 		return nil, err
 	}
 
-	go s.runInstall(context.WithoutCancel(ctx), row, mark, wasReady, m.HealthCheck.Service)
+	go s.runInstall(context.WithoutCancel(ctx), row, mark, wasReady)
 	return row, nil
 }
 
 // runInstall does the container half. Every step before the register call is
 // undoable and is undone by the deferred handler; everything after it is not.
 func (s *TenantPluginService) runInstall(
-	base context.Context, row *types.TenantPlugin, mark *installMark, wasReady bool, healthService string,
+	base context.Context, row *types.TenantPlugin, mark *installMark, wasReady bool,
 ) {
 	ctx, cancel := context.WithTimeout(base, pluginInstallBudget)
 	defer cancel()
@@ -304,6 +333,11 @@ func (s *TenantPluginService) runInstall(
 		failErr = err
 		return
 	}
+	manifest, err := manifestFromRow(row)
+	if err != nil {
+		failErr = err
+		return
+	}
 	// Start pulls the image when it is missing, so this one call is the whole
 	// multi-minute part of the install.
 	inst, err := s.runtime.Start(ctx, spec)
@@ -337,7 +371,7 @@ func (s *TenantPluginService) runInstall(
 	})
 	// Register validates and stores but never dials, so reachability has to be
 	// proven here or a ready row can point at a container that never served.
-	if err := extension.ProbeGRPC(ctx, addr, healthService, pluginProbeBudget); err != nil {
+	if err := extension.ProbeGRPC(ctx, addr, manifest.HealthCheck.Service, pluginProbeBudget); err != nil {
 		failErr = fmt.Errorf("health probe: %w", err)
 		return
 	}

@@ -21,6 +21,7 @@ const (
 	labelPluginID = "com.weknora.plugin.id"
 	labelTenantID = "com.weknora.plugin.tenant"
 	labelPolicy   = "com.weknora.plugin.policy"
+	labelSpecHash = "com.weknora.plugin.spec-hash"
 	// labelPort lets List rebuild a dial address without the originating spec.
 	labelPort = "com.weknora.plugin.port"
 )
@@ -48,6 +49,7 @@ type dockerAPI interface {
 	ContainerLogs(
 		ctx context.Context, containerID string, options client.ContainerLogsOptions,
 	) (client.ContainerLogsResult, error)
+	NetworkInspect(ctx context.Context, networkID string, options client.NetworkInspectOptions) (client.NetworkInspectResult, error)
 	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (client.ImageInspectResult, error)
 	ImagePull(ctx context.Context, refStr string, options client.ImagePullOptions) (client.ImagePullResponse, error)
 }

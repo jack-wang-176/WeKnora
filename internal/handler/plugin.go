@@ -116,7 +116,8 @@ func pluginScope(c *gin.Context) *uint64 {
 
 func respondPluginServiceError(c *gin.Context, err error) {
 	switch {
-	case stderrors.Is(err, service.ErrPluginInvalid):
+	case stderrors.Is(err, service.ErrPluginInvalid), stderrors.Is(err, extension.ErrInvalidManifest),
+		stderrors.Is(err, extension.ErrUnenforceable), stderrors.Is(err, extension.ErrIncompatible):
 		_ = c.Error(apperrors.NewBadRequestError(err.Error()))
 	case stderrors.Is(err, service.ErrPluginNotFound):
 		_ = c.Error(apperrors.NewNotFoundError(err.Error()))
@@ -184,6 +185,9 @@ func (h *PluginHandler) Get(c *gin.Context) {
 	// for a plugin that was never meant to be up.
 	if h.host != nil && row.Enabled && row.Status == types.PluginStatusReady {
 		resp.State = string(h.host.Health(c.Request.Context(), row.PluginID).State)
+	}
+	if !row.Enabled {
+		resp.State = string(extension.StateDisabled)
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": resp})
 }

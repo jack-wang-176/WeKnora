@@ -3,6 +3,9 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/Tencent/WeKnora/internal/application/repository"
 	"github.com/Tencent/WeKnora/internal/extension"
@@ -65,42 +68,36 @@ func NewEndpointPersister(repo repository.TenantPluginRepository) extension.Endp
 	}
 }
 
-// manifestFromRow rebuilds the manifest the host needs from one stored row.
-// Fields it leaves unset are deliberate: the row records what was installed,
-// not what the plugin claimed about itself.
+// manifestFromRow restores the declaration, then overlays operator-owned state.
 func manifestFromRow(row *types.TenantPlugin) (*extension.Manifest, error) {
 	env, err := envMap(row.Envs)
 	if err != nil {
 		return nil, fmt.Errorf("envs: %w", err)
 	}
-	m := &extension.Manifest{
-		Metadata: extension.Metadata{
-			ID:   row.PluginID,
-			Name: row.PluginID,
-		},
-		Extension: extension.ExtensionSpec{
-			Kind: extension.Kind(row.Kind),
-		},
-		Runtime: extension.Runtime{
-			Transport: extension.Transport(row.Transport),
-			Endpoint:  derefString(row.Endpoint),
-			Env:       env,
-		},
-		// Nothing installed at run time may be required: a required extension
-		// that fails health turns /readyz red for the whole process. Validate
-		// downgrades tenant-scoped ids on its own; this covers the
-		// process-level rows it leaves alone.
-		Criticality: extension.CriticalityOptional,
-		// Disabled is an operator decision, not a health signal: Health
-		// short-circuits on it instead of spending a dial timeout, and Ready
-		// buckets it away from Degraded.
-		Disabled: !row.Enabled,
+	m := &extension.Manifest{}
+	if row.Manifest != "" {
+		decoder := yaml.NewDecoder(strings.NewReader(row.Manifest))
+		decoder.KnownFields(true)
+		if err := decoder.Decode(m); err != nil {
+			return nil, fmt.Errorf("stored manifest: %w", err)
+		}
 	}
-	// The author's declaration, replayed as written. PolicyClass is deliberately
-	// not folded in: it is enforced by the runtime's network mode, and
-	// outbound=none on a remote transport is rejected as unenforceable, which
-	// would make every offline plugin unloadable.
-	m.Permissions = declaredPermissions(row.Permissions)
+	m.Metadata.ID = row.PluginID
+	if m.Metadata.Name == "" {
+		m.Metadata.Name = row.PluginID
+	}
+	m.Extension.Kind = extension.Kind(row.Kind)
+	m.Runtime = extension.Runtime{
+		Transport: extension.Transport(row.Transport), Endpoint: derefString(row.Endpoint), Env: env,
+		ManagedOffline: row.Channel == types.PluginChannelBundle && row.PolicyClass == types.PluginPolicyOffline,
+	}
+	m.Criticality = extension.CriticalityOptional
+	m.Disabled = !row.Enabled
+	m.Builtin = false
+	m.Permissions, err = declaredPermissions(row.Permissions)
+	if err != nil {
+		return nil, fmt.Errorf("%w: permissions: %v", ErrPluginInvalid, err)
+	}
 	return m, nil
 }
 
@@ -132,32 +129,14 @@ func envMap(raw types.JSONMap) (map[string]string, error) {
 // declaredPermissions reads the stored declaration back into the struct the
 // host validates. An absent section stays at its zero value, which Validate
 // already treats as "unspecified".
-func declaredPermissions(raw types.JSONMap) extension.Permissions {
-	var p extension.Permissions
-	if network, ok := raw["network"].(map[string]any); ok {
-		if outbound, ok := network["outbound"].(string); ok {
-			p.Network.Outbound = outbound
-		}
-		p.Network.Allow = stringSlice(network["allow"])
+func declaredPermissions(raw types.JSONMap) (extension.Permissions, error) {
+	var permissions extension.Permissions
+	encoded, err := yaml.Marshal(raw)
+	if err != nil {
+		return permissions, err
 	}
-	if fs, ok := raw["filesystem"].(map[string]any); ok {
-		p.Filesystem.Read = stringSlice(fs["read"])
-		p.Filesystem.Write = stringSlice(fs["write"])
-	}
-	p.Secrets = stringSlice(raw["secrets"])
-	return p
-}
-
-func stringSlice(v any) []string {
-	items, ok := v.([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(items))
-	for _, item := range items {
-		if s, ok := item.(string); ok {
-			out = append(out, s)
-		}
-	}
-	return out
+	decoder := yaml.NewDecoder(strings.NewReader(string(encoded)))
+	decoder.KnownFields(true)
+	err = decoder.Decode(&permissions)
+	return permissions, err
 }

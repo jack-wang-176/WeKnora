@@ -113,7 +113,7 @@ func (s *pluginService) Register(
 		if err := s.plugins.UpdatePluginEnvs(ctx, row.ID, req.Envs); err != nil {
 			return nil, err
 		}
-		if err := s.plugins.UpdatePluginPermissions(ctx, row.ID, req.Permissions); err != nil {
+		if err := s.plugins.UpdatePluginPermissions(ctx, row.ID, map[string]any(row.Permissions)); err != nil {
 			return nil, err
 		}
 	default:

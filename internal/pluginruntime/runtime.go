@@ -2,12 +2,16 @@ package pluginruntime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 )
@@ -33,6 +37,9 @@ type Instance struct {
 	Port          int
 	State         State
 	CreatedAt     time.Time
+	managed       bool
+	specHash      string
+	networks      []string
 }
 
 // Runtime is the seam the install flow depends on. It is intentionally narrow:
@@ -120,6 +127,9 @@ func (r *DockerRuntime) Start(ctx context.Context, spec Spec) (Instance, error) 
 	if err != nil {
 		return Instance{}, err
 	}
+	if err := r.validateNetwork(ctx, spec.Policy, networkName); err != nil {
+		return Instance{}, err
+	}
 
 	name := ContainerName(spec.ID)
 	existing, err := r.inspect(ctx, name)
@@ -127,7 +137,11 @@ func (r *DockerRuntime) Start(ctx context.Context, spec Spec) (Instance, error) 
 		return Instance{}, err
 	}
 	if existing.State != StateGone {
-		if existing.State == StateRunning && existing.Image == spec.ImageRef {
+		if !existing.managed || existing.PluginID != spec.ID {
+			return Instance{}, fmt.Errorf("%w: container %s is not owned by this plugin", ErrInvalidSpec, name)
+		}
+		if existing.State == StateRunning && existing.Image == spec.ImageRef && existing.specHash == runtimeSpecHash(spec) &&
+			len(existing.networks) == 1 && existing.networks[0] == networkName {
 			return existing, nil
 		}
 		if err := r.Stop(ctx, name); err != nil {
@@ -250,6 +264,13 @@ func (r *DockerRuntime) inspect(ctx context.Context, containerName string) (Inst
 		inst.PluginID = c.Config.Labels[labelPluginID]
 		inst.TenantID = parseUint(c.Config.Labels[labelTenantID])
 		inst.Port = parsePort(c.Config.Labels[labelPort])
+		inst.managed = c.Config.Labels[labelManaged] == "true"
+		inst.specHash = c.Config.Labels[labelSpecHash]
+	}
+	if c.NetworkSettings != nil {
+		for name := range c.NetworkSettings.Networks {
+			inst.networks = append(inst.networks, name)
+		}
 	}
 	if c.State != nil {
 		inst.State = stateOf(string(c.State.Status))
@@ -370,7 +391,32 @@ func labelsFor(spec Spec) map[string]string {
 		labelTenantID: strconv.FormatUint(spec.TenantID, 10),
 		labelPolicy:   strings.TrimSpace(spec.Policy),
 		labelPort:     strconv.Itoa(spec.effectivePort()),
+		labelSpecHash: runtimeSpecHash(spec),
 	}
+}
+
+func runtimeSpecHash(spec Spec) string {
+	spec.Port = spec.effectivePort()
+	if spec.Policy == "" {
+		spec.Policy = types.PluginPolicyOffline
+	}
+	encoded, _ := json.Marshal(spec)
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:])
+}
+
+func (r *DockerRuntime) validateNetwork(ctx context.Context, policy, name string) error {
+	if policy != "" && policy != types.PluginPolicyOffline {
+		return nil
+	}
+	result, err := r.api.NetworkInspect(ctx, name, client.NetworkInspectOptions{})
+	if err != nil {
+		return wrapDockerError("NetworkInspect", err)
+	}
+	if !result.Network.Internal {
+		return fmt.Errorf("%w: offline network %q must have internal=true", ErrPolicyUnsupported, name)
+	}
+	return nil
 }
 
 func envSlice(env map[string]string) []string {

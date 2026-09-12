@@ -1,0 +1,1 @@
+ALTER TABLE tenant_plugins ADD COLUMN IF NOT EXISTS manifest TEXT NOT NULL DEFAULT '';

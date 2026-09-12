@@ -65,12 +65,10 @@ func newEndpointPluginRow(req *types.PluginRegisterRequest, now time.Time) (*typ
 	}
 	policy := strings.TrimSpace(req.PolicyClass)
 	if policy == "" {
-		// scoped is the middle setting: neither "may reach anything" nor a
-		// class the runtime cannot honour.
-		policy = types.PluginPolicyScoped
+		policy = types.PluginPolicyOpen
 	}
-	if _, ok := pluginPolicyClasses[policy]; !ok {
-		return nil, fmt.Errorf("%w: policy_class %q is not one of offline/scoped/open", ErrPluginInvalid, req.PolicyClass)
+	if policy != types.PluginPolicyOpen {
+		return nil, fmt.Errorf("%w: endpoint network policy is externally managed; use open or install a managed bundle", ErrPluginInvalid)
 	}
 
 	row := &types.TenantPlugin{
@@ -93,6 +91,20 @@ func newEndpointPluginRow(req *types.PluginRegisterRequest, now time.Time) (*typ
 	}
 	if row.Permissions == nil {
 		row.Permissions = types.JSONMap{}
+	}
+	if req.Manifest != "" {
+		manifest, err := parsePluginManifest(req.Manifest)
+		if err != nil {
+			return nil, err
+		}
+		if manifest.Metadata.ID != base || string(manifest.Extension.Kind) != kind {
+			return nil, fmt.Errorf("%w: manifest id and type must match the registration", ErrPluginInvalid)
+		}
+		if len(req.Permissions) > 0 {
+			return nil, fmt.Errorf("%w: declare permissions in the manifest only", ErrPluginInvalid)
+		}
+		row.Manifest = req.Manifest
+		row.Permissions = permissionsMap(manifest.Permissions)
 	}
 	return row, nil
 }

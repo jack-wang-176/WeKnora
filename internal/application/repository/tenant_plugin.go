@@ -192,6 +192,7 @@ func (r *tenantPluginRepository) UpdatePlugin(ctx context.Context, p *types.Tena
 			"transport":        p.Transport,
 			"endpoint":         p.Endpoint,
 			"policy_class":     p.PolicyClass,
+			"manifest":         p.Manifest,
 			"source_url":       p.SourceURL,
 			"source_ref":       p.SourceRef,
 			"source_sha":       p.SourceSHA,

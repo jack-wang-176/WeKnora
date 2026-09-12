@@ -65,6 +65,7 @@ type TenantPlugin struct {
 	// re-runs Manifest.Validate on every read, and a marker here would invite
 	// something to skip that.
 	Permissions JSONMap        `gorm:"column:permissions;type:jsonb;not null;default:'{}'" json:"permissions"`
+	Manifest    string         `gorm:"column:manifest;type:text;not null;default:''" json:"-"`
 	CreatedAt   time.Time      `gorm:"column:created_at;type:timestamptz;not null;autoCreateTime" json:"created_at"`
 	UpdatedAt   time.Time      `gorm:"column:updated_at;type:timestamptz;not null;autoUpdateTime" json:"updated_at"`
 	DeletedAt   gorm.DeletedAt `gorm:"column:deleted_at;type:timestamptz;index" json:"deleted_at,omitempty"`
@@ -108,6 +109,7 @@ type PluginRegisterRequest struct {
 	// synthesised into it: a value this code invented has no answer to "who
 	// claimed this".
 	Permissions map[string]any `json:"permissions,omitempty"`
+	Manifest    string         `json:"manifest,omitempty"`
 }
 
 // Where a bundle-channel plugin comes from. The type is declared by the caller

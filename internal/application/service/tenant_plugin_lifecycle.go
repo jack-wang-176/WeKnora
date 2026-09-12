@@ -56,7 +56,7 @@ func (s *TenantPluginService) UninstallPlugin(ctx context.Context, tenantID *uin
 	if err != nil {
 		return err
 	}
-	now := s.clock()().UTC()
+	now := s.timestamp()
 	var row *types.TenantPlugin
 	mark := &installMark{}
 	err = s.withInstallLock(ctx, tenantID, lockBase(pre), func(ctx context.Context) error {
@@ -188,7 +188,7 @@ func (s *TenantPluginService) EnablePlugin(
 	if err != nil {
 		return nil, err
 	}
-	now := s.clock()().UTC()
+	now := s.timestamp()
 	var (
 		row     *types.TenantPlugin
 		already bool
@@ -229,6 +229,6 @@ func (s *TenantPluginService) EnablePlugin(
 	if already {
 		return row, nil
 	}
-	go s.runInstall(context.WithoutCancel(ctx), row, mark, false, "")
+	go s.runInstall(context.WithoutCancel(ctx), row, mark, false)
 	return row, nil
 }
