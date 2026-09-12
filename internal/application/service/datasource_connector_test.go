@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -9,6 +10,8 @@ import (
 	"github.com/Tencent/WeKnora/internal/datasource"
 	"github.com/Tencent/WeKnora/internal/extension"
 	"github.com/Tencent/WeKnora/internal/types"
+	"github.com/hibiken/asynq"
+	"github.com/stretchr/testify/require"
 )
 
 // stubConnector is a builtin connector; only Type() is ever reached here.
@@ -119,4 +122,38 @@ func TestResolveConnectorSkipsADisabledPlugin(t *testing.T) {
 	if !errors.Is(err, datasource.ErrConnectorNotFound) {
 		t.Fatalf("resolveConnector() = %v, want %v", err, datasource.ErrConnectorNotFound)
 	}
+}
+
+func TestProcessSyncRestoresTenantBeforeResolvingPlugin(t *testing.T) {
+	harness := newSyncDeletionHarness(t, false, "ds-context", "sync-context", nil, nil)
+	harness.ds.Type = "local-files--1"
+	host := newStubHost(manifestOf(harness.ds.Type, extension.KindDatasource))
+	probeError := errors.New("connector resolution reached the tenant plugin")
+	host.openErr = probeError
+	harness.svc.host = host
+	_, err := harness.run(t)
+	require.ErrorIs(t, err, probeError)
+	require.Equal(t, []string{harness.ds.Type}, host.opened)
+}
+
+func TestProcessSyncRejectsMismatchedTenantBeforeOpeningPlugin(t *testing.T) {
+	harness := newSyncDeletionHarness(t, false, "ds-context", "sync-context", nil, nil)
+	host := newStubHost(manifestOf("local-files--1", extension.KindDatasource))
+	harness.svc.host = host
+	payload, err := json.Marshal(types.DataSourceSyncPayload{DataSourceID: harness.ds.ID, SyncLogID: harness.syncLogID, TenantID: 2})
+	require.NoError(t, err)
+	err = harness.svc.ProcessSync(context.Background(), asynq.NewTask(types.TypeDataSourceSync, payload))
+	require.ErrorIs(t, err, asynq.SkipRetry)
+	require.Empty(t, host.opened)
+}
+
+func TestPluginCredentialValidationUsesTenantResolver(t *testing.T) {
+	host := newStubHost(manifestOf("local-files--1", extension.KindDatasource))
+	probeError := errors.New("validation reached the plugin")
+	host.openErr = probeError
+	err := serviceWith(t, host).ValidateCredentials(tenantCtx(1), "local-files--1", nil)
+	require.ErrorIs(t, err, probeError)
+	require.Equal(t, []string{"local-files--1"}, host.opened)
+	err = serviceWith(t, host).ValidateCredentials(tenantCtx(2), "local-files--1", nil)
+	require.ErrorIs(t, err, datasource.ErrConnectorNotFound)
 }

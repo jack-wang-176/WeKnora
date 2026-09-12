@@ -8,8 +8,8 @@ import (
 
 // Two route groups, not one that inspects tenant_id: the scope difference has to
 // be visible to assertAPIKeyPoliciesMatchRoutes, which can only read the route
-// table. Tenant scope is Viewer+ read / Admin+ write; process scope is Admin+
-// throughout and full-access keys only, since those plugins serve every tenant.
+// table. Tenant scope is Viewer+ read / Admin+ write; process scope requires a
+// system administrator and is not available to tenant API keys.
 // The bundle channel adds /install and /:id/events under the same rules.
 func RegisterPluginRoutes(r *gin.RouterGroup, h *handler.PluginHandler, g *rbacGuards) {
 	plugins := g.apiKeyGroup(r.Group("/plugins"), apiKeyFullAccess())
@@ -26,17 +26,17 @@ func RegisterPluginRoutes(r *gin.RouterGroup, h *handler.PluginHandler, g *rbacG
 		plugins.PUT("/:id/envs", g.Admin(), h.SetEnvs)
 	}
 
-	admin := g.apiKeyGroup(r.Group("/admin/plugins", handler.PluginProcessScope()), apiKeyFullAccess())
+	admin := r.Group("/admin/plugins", handler.PluginProcessScope(), g.SystemAdmin())
 	{
-		admin.GET("", g.Admin(), h.List)
-		admin.POST("", g.Admin(), h.Register)
-		admin.POST("/install", g.Admin(), h.Install)
-		admin.GET("/:id", g.Admin(), h.Get)
-		admin.GET("/:id/events", g.Admin(), h.InstallEvents)
-		admin.DELETE("/:id", g.Admin(), h.Uninstall)
-		admin.POST("/:id/enable", g.Admin(), h.Enable)
-		admin.POST("/:id/disable", g.Admin(), h.Disable)
-		admin.POST("/:id/reconnect", g.Admin(), h.Reconnect)
-		admin.PUT("/:id/envs", g.Admin(), h.SetEnvs)
+		admin.GET("", h.List)
+		admin.POST("", h.Register)
+		admin.POST("/install", h.Install)
+		admin.GET("/:id", h.Get)
+		admin.GET("/:id/events", h.InstallEvents)
+		admin.DELETE("/:id", h.Uninstall)
+		admin.POST("/:id/enable", h.Enable)
+		admin.POST("/:id/disable", h.Disable)
+		admin.POST("/:id/reconnect", h.Reconnect)
+		admin.PUT("/:id/envs", h.SetEnvs)
 	}
 }

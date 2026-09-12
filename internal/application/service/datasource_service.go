@@ -645,6 +645,11 @@ func (s *DataSourceService) ProcessSync(ctx context.Context, task *asynq.Task) e
 		return nil
 	}
 
+	if ds.TenantID != payload.TenantID || syncLog.TenantID != ds.TenantID || syncLog.DataSourceID != ds.ID {
+		return fmt.Errorf("data source sync ownership mismatch: %w", asynq.SkipRetry)
+	}
+	ctx = context.WithValue(ctx, types.TenantIDContextKey, ds.TenantID)
+
 	kb, kbErr := s.kbService.GetKnowledgeBaseByID(ctx, ds.KnowledgeBaseID)
 	if kbErr != nil {
 		logger.Warnf(ctx, "knowledge base not found (likely deleted), cancelling sync: kb=%s ds=%s err=%v",
@@ -654,6 +659,9 @@ func (s *DataSourceService) ProcessSync(ctx context.Context, task *asynq.Task) e
 		syncLog.ErrorMessage = "knowledge base has been deleted"
 		_ = s.syncLogRepo.Update(ctx, syncLog)
 		return nil
+	}
+	if kb.TenantID != ds.TenantID {
+		return fmt.Errorf("knowledge base tenant does not own the data source: %w", asynq.SkipRetry)
 	}
 
 	wasPaused := ds.Status == types.DataSourceStatusPaused
